@@ -1,0 +1,79 @@
+---
+import Base from '../../../../layouts/Base.astro';
+import AccountNav from '../../../../components/AccountNav.astro';
+import FicheForm from '../../../../components/FicheForm.astro';
+import StatusBadge from '../../../../components/StatusBadge.astro';
+import { SITE, ENV } from '../../../../config';
+import { parseFicheForm, photoLimit } from '../../../../lib/ficheForm';
+import { getFiche, updateFiche, setStatus, deleteFiche, isIndexable } from '../../../../lib/fiches';
+import { removeImage } from '../../../../lib/uploads';
+import { notifyAdmins } from '../../../../lib/mail';
+import { flash } from '../../../../lib/flash';
+import { audit, run } from '../../../../lib/db';
+
+const user = Astro.locals.user!;
+const fiche = getFiche(Number(Astro.params.id));
+if (!fiche || (fiche.owner_id !== user.id && user.role !== 'admin')) return new Response('Fiche introuvable', { status: 404 });
+
+let errors: string[] = [];
+let values: any = fiche;
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  if (form.get('_action') === 'delete') {
+    if (fiche.source === 'osm') {
+      // Fiche importée : on la libère (elle redevient non revendiquée) plutôt que de la supprimer.
+      run("UPDATE fiches SET owner_id = NULL, updated_at = datetime('now') WHERE id = ?", fiche.id);
+      flash(Astro.cookies, 'info', 'Vous ne gérez plus cette fiche.');
+    } else {
+      [fiche.logo, ...fiche.photos].filter(Boolean).forEach(removeImage);
+      deleteFiche(fiche.id);
+      flash(Astro.cookies, 'info', 'Fiche supprimée.');
+    }
+    audit(user.id, 'fiche.delete', String(fiche.id));
+    return Astro.redirect('/compte');
+  }
+  const { data, errors: errs } = await parseFicheForm(form, { pro: fiche.certified, premium: fiche.premium, maxPhotos: photoLimit(fiche), current: fiche });
+  errors = errs;
+  values = { ...fiche, ...data };
+  if (!errors.length) {
+    const slug = updateFiche(fiche.id, data);
+    audit(user.id, 'fiche.update', String(fiche.id));
+    if (fiche.status === 'rejected' || fiche.status === 'unpublished') {
+      setStatus(fiche.id, 'pending');
+      await notifyAdmins(`Fiche resoumise : ${data.name}`, `${ENV.siteUrl}/admin/fiches/${fiche.id}`);
+      flash(Astro.cookies, 'ok', 'Modifications enregistrées, fiche resoumise à validation.');
+    } else flash(Astro.cookies, 'ok', 'Modifications enregistrées.');
+    return Astro.redirect(fiche.status === 'published' ? `/${slug}` : `/compte/fiches/${fiche.id}`);
+  }
+}
+---
+<Base title={`Modifier ${fiche.name} | ${SITE.fullName}`} noindex>
+  <div class="wrap narrow">
+    <header class="page-head">
+      <h1>{fiche.name}</h1>
+      <p class="badges"><StatusBadge fiche={fiche} /> <a href={`/${fiche.slug}`}>{fiche.status === 'published' ? 'Voir la fiche publique' : 'Aperçu'} →</a></p>
+    </header>
+    <AccountNav />
+    <div class="gap"></div>
+    <FicheForm values={values} pro={fiche.certified} premium={fiche.premium} maxPhotos={photoLimit(fiche)} ficheId={fiche.id} indexable={isIndexable(fiche)} errors={errors} submitLabel="Enregistrer les modifications" upgradeUrl={`/compte/fiches/${fiche.id}/abonnement`} />
+    <form method="post" class="danger panel">
+      <input type="hidden" name="_action" value="delete" />
+      <div>
+        <h2>{fiche.source === 'osm' ? 'Ne plus gérer cette fiche' : 'Supprimer la fiche'}</h2>
+        <p class="muted">{fiche.source === 'osm' ? "La fiche restera dans l'annuaire mais redeviendra non revendiquée." : 'Suppression définitive de la fiche et de ses images.'}{fiche.certified && ' Pensez à résilier votre abonnement avant.'}</p>
+      </div>
+      <button class="btn btn-danger" type="submit" data-confirm="Confirmer ? Cette action est irréversible.">{fiche.source === 'osm' ? 'Libérer la fiche' : 'Supprimer'}</button>
+    </form>
+  </div>
+</Base>
+
+<style>
+  .narrow { max-width: 76rem; }
+  .gap { height: 1rem; }
+  .badges { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
+  .badges a { color: var(--accent); font-weight: 600; font-size: .9rem; }
+  .danger { margin-top: 2rem; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 1rem; border-color: color-mix(in srgb, #dc2626 35%, var(--line)); }
+  .danger h2 { margin: 0 0 .3rem; font-size: 1.05rem; }
+  .danger p { margin: 0; }
+</style>

@@ -1,0 +1,33 @@
+---
+import Base from '../layouts/Base.astro';
+import Breadcrumb from '../components/Breadcrumb.astro';
+import { SITE, CITY } from '../config';
+import { stats } from '../lib/fiches';
+import { collectionGraph } from '../lib/schema';
+
+const cities = stats().cities;
+const jsonLd = collectionGraph({
+  path: '/villes', name: `Annuaire par ville : ${CITY.area}`, description: SITE.description,
+  items: cities.map((c) => ({ name: c.city, url: `/ville/${c.city_slug}` })),
+});
+---
+<Base title={`Annuaire par ville : ${CITY.area} | ${SITE.fullName}`} jsonLd={jsonLd}>
+  <div class="wrap">
+    <header class="page-head">
+      <Breadcrumb items={[{ name: 'Annuaire', href: '/annuaire' }, { name: 'Villes' }]} />
+      <h1>Toutes les villes</h1>
+      <p>{cities.length} communes autour de {CITY.name}.</p>
+    </header>
+    <ul class="cities panel">
+      {cities.map((c) => <li><a href={`/ville/${c.city_slug}`}>{c.city}<span>{c.n.toLocaleString('fr-FR')}</span></a></li>)}
+    </ul>
+  </div>
+</Base>
+
+<style>
+  .cities { list-style: none; margin: 0; columns: 3 14rem; column-gap: 2rem; }
+  .cities li { break-inside: avoid; }
+  .cities a { display: flex; justify-content: space-between; gap: 1rem; padding: .45rem 0; border-bottom: 1px dashed var(--line); font-weight: 500; }
+  .cities a:hover { color: var(--accent); }
+  .cities span { color: var(--muted); font-size: .82rem; }
+</style>

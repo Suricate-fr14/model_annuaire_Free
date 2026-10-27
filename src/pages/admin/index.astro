@@ -1,0 +1,168 @@
+---
+import Admin from '../../layouts/Admin.astro';
+import Icon from '../../components/Icon.astro';
+import { SITE, PLANS, stripeEnabled, axonautEnabled, ENV } from '../../config';
+import { get, all } from '../../lib/db';
+import { CERTIFIED_SQL, INDEXABLE_SQL } from '../../lib/fiches';
+
+const n = (sql: string, ...p: any[]) => get<{ n: number }>(sql, ...p)?.n ?? 0;
+const premium = n(`SELECT COUNT(*) n FROM fiches WHERE ${CERTIFIED_SQL} AND plan = 'premium'`);
+const paid = n(`SELECT COUNT(*) n FROM fiches WHERE ${CERTIFIED_SQL}`);
+const mrr = Math.round(all<{ plan: string; pro_interval: string }>(`SELECT plan, pro_interval FROM fiches WHERE ${CERTIFIED_SQL} AND pro_status <> 'canceled'`)
+  .reduce((s, r) => { const p = r.plan === 'premium' ? PLANS.premium : PLANS.pro; return s + (r.pro_interval === 'year' ? p.year / 12 : r.pro_interval === 'month' ? p.month : 0); }, 0));
+
+const kpis = [
+  { icon: 'list', label: 'Fiches publiées', value: n("SELECT COUNT(*) n FROM fiches WHERE status = 'published'"), href: '/admin/fiches?statut=published' },
+  { icon: 'google', label: 'Fiches indexées', value: n(`SELECT COUNT(*) n FROM fiches WHERE ${INDEXABLE_SQL}`), href: '/admin/fiches?index=1' },
+  { icon: 'star', label: 'Abonnés', value: paid, sub: `${paid - premium} Pro · ${premium} Premium`, href: '/admin/fiches?plan=paid' },
+  { icon: 'card', label: 'Revenu mensuel', value: `${mrr.toLocaleString('fr-FR')} €`, sub: 'récurrent, HT', href: '/admin/facturation' },
+  { icon: 'users', label: 'Utilisateurs', value: n('SELECT COUNT(*) n FROM users'), sub: `+${n("SELECT COUNT(*) n FROM users WHERE created_at > datetime('now', '-7 days')")} cette semaine`, href: '/admin/utilisateurs' },
+  { icon: 'mail', label: 'Demandes de contact', value: n("SELECT COUNT(*) n FROM leads WHERE status = 'sent' AND decided_at >= date('now', 'start of month')"), sub: `transmises ce mois · ${n("SELECT COUNT(*) n FROM leads WHERE status = 'pending'")} à vérifier`, href: '/admin/demandes' },
+  { icon: 'eye', label: 'Vues des fiches (total)', value: n('SELECT COALESCE(SUM(views), 0) n FROM fiches').toLocaleString('fr-FR'), sub: `${n('SELECT COALESCE(SUM(clicks_phone + clicks_web + clicks_route), 0) n FROM fiches')} contacts`, href: '/admin/fiches' },
+];
+
+const todo = [
+  ...all<any>("SELECT id, name, city, created_at FROM fiches WHERE status = 'pending' ORDER BY created_at LIMIT 6")
+    .map((f) => ({ type: 'Fiche à valider', icon: 'list', tone: 'warn', label: f.name, meta: `${f.city} · ${f.created_at.slice(0, 10)}`, href: `/admin/fiches/${f.id}` })),
+  ...all<any>("SELECT c.id, f.name, c.created_at FROM claims c JOIN fiches f ON f.id = c.fiche_id WHERE c.status = 'pending' ORDER BY c.created_at LIMIT 6")
+    .map((c) => ({ type: 'Revendication', icon: 'key', tone: 'pro', label: c.name, meta: c.created_at.slice(0, 10), href: `/admin/revendications#c${c.id}` })),
+  ...all<any>("SELECT r.id, r.reason, f.name, f.id AS fid, r.created_at FROM reports r JOIN fiches f ON f.id = r.fiche_id WHERE r.status = 'open' ORDER BY r.created_at LIMIT 6")
+    .map((r) => ({ type: 'Signalement', icon: 'flag', tone: 'err', label: r.name, meta: `${r.reason} · ${r.created_at.slice(0, 10)}`, href: '/admin/signalements' })),
+  ...all<any>("SELECT l.id, l.name, f.name AS fiche, l.created_at FROM leads l JOIN fiches f ON f.id = l.fiche_id WHERE l.status = 'pending' ORDER BY l.created_at LIMIT 6")
+    .map((l) => ({ type: 'Demande à vérifier', icon: 'mail', tone: 'pro', label: l.fiche, meta: `${l.name} · ${l.created_at.slice(0, 10)}`, href: `/admin/demandes#l${l.id}` })),
+  ...all<any>("SELECT id, stripe_invoice_id, error FROM billing_invoices WHERE status = 'error' LIMIT 6")
+    .map((b) => ({ type: 'Facture en erreur', icon: 'card', tone: 'err', label: b.stripe_invoice_id, meta: b.error.slice(0, 60), href: '/admin/facturation?statut=error' })),
+];
+
+// Séries sur 30 jours : nouvelles fiches de professionnels et nouveaux comptes.
+const days = Array.from({ length: 30 }, (_, i) => new Date(Date.now() - (29 - i) * 864e5).toISOString().slice(0, 10));
+const series = (sql: string) => {
+  const m = new Map(all<{ d: string; n: number }>(sql).map((r) => [r.d, r.n]));
+  return days.map((d) => m.get(d) ?? 0);
+};
+const ficheSeries = series("SELECT substr(created_at, 1, 10) d, COUNT(*) n FROM fiches WHERE source <> 'osm' AND created_at > datetime('now', '-30 days') GROUP BY d");
+const userSeries = series("SELECT substr(created_at, 1, 10) d, COUNT(*) n FROM users WHERE created_at > datetime('now', '-30 days') GROUP BY d");
+const charts = [
+  { title: 'Nouvelles fiches (30 j)', data: ficheSeries, total: ficheSeries.reduce((a, b) => a + b, 0) },
+  { title: 'Nouveaux comptes (30 j)', data: userSeries, total: userSeries.reduce((a, b) => a + b, 0) },
+];
+
+const top = all<any>(`SELECT id, slug, name, views, clicks_phone + clicks_web + clicks_route AS contacts FROM fiches WHERE status = 'published' ORDER BY views DESC LIMIT 6`);
+const paris = (d: string) => new Date(d.replace(' ', 'T') + 'Z').toLocaleString('fr-FR', { timeZone: SITE.timezone, dateStyle: 'short', timeStyle: 'short' });
+const activity = all<any>('SELECT a.action, a.target, a.created_at, u.email FROM audit a LEFT JOIN users u ON u.id = a.user_id ORDER BY a.id DESC LIMIT 10');
+const services = [
+  { label: 'Paiement', ok: stripeEnabled(), on: 'Stripe', off: 'mode démo' },
+  { label: 'Facturation', ok: axonautEnabled(), on: 'Axonaut', off: 'clé absente' },
+  { label: 'Emails', ok: Boolean(ENV.resendKey), on: 'Resend', off: 'boîte locale' },
+];
+// Anti-aspiration des coordonnées (api/contact) : demandes refusées sur 7 jours, nombre de visiteurs concernés.
+const blocks = get<{ hits: number; ips: number }>("SELECT COALESCE(SUM(hits), 0) hits, COUNT(DISTINCT ip_hash) ips FROM contact_blocks WHERE day > date('now', '-7 days')") ?? { hits: 0, ips: 0 };
+---
+<Admin title="Tableau de bord" subtitle={new Date().toLocaleDateString('fr-FR', { timeZone: SITE.timezone, weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}>
+  <section class="kpis">
+    {kpis.map((k) => (
+      <a class="panel kpi" href={k.href}>
+        <span class="k-ic"><Icon name={k.icon} size={18} /></span>
+        <span class="k-l">{k.label}</span>
+        <span class="k-v">{k.value}</span>
+        {k.sub && <span class="k-s">{k.sub}</span>}
+      </a>
+    ))}
+  </section>
+
+  <div class="grid">
+    <section class="panel box todo">
+      <div class="card-h"><h2>À traiter</h2><span class="chip">{todo.length}</span></div>
+      {todo.length ? (
+        <ul>
+          {todo.map((t) => (
+            <li>
+              <a href={t.href}>
+                <span class:list={['t-ic', t.tone]}><Icon name={t.icon} size={16} /></span>
+                <span class="t-txt"><strong>{t.label}</strong><small>{t.type} · {t.meta}</small></span>
+                <span class="t-go">→</span>
+              </a>
+            </li>
+          ))}
+        </ul>
+      ) : <p class="empty"><Icon name="check" size={18} /> Rien en attente.</p>}
+    </section>
+
+    <div class="col">
+      {charts.map((c) => {
+        const max = Math.max(1, ...c.data);
+        return (
+          <section class="panel box">
+            <div class="card-h"><h2>{c.title}</h2><strong class="c-total">{c.total}</strong></div>
+            <div class="bars" role="img" aria-label={`${c.title} : ${c.total} au total`}>
+              {c.data.map((v, i) => <span style={`height:${Math.max(4, (v / max) * 100)}%`} title={`${days[i]} : ${v}`} class:list={{ zero: v === 0 }}></span>)}
+            </div>
+            <div class="bars-x"><span>{days[0].slice(5).split('-').reverse().join('/')}</span><span>aujourd'hui</span></div>
+          </section>
+        );
+      })}
+    </div>
+
+    <section class="panel box">
+      <div class="card-h"><h2>Fiches les plus vues</h2><a href="/admin/fiches">Toutes →</a></div>
+      <table class="mini">
+        <tbody>{top.map((f) => <tr><td><a href={`/admin/fiches/${f.id}`}>{f.name}</a></td><td class="r">{f.views} vues</td><td class="r muted">{f.contacts} contacts</td></tr>)}</tbody>
+      </table>
+    </section>
+
+    <section class="panel box">
+      <div class="card-h"><h2>Services</h2></div>
+      <ul class="svc">
+        {services.map((s) => <li><span>{s.label}</span><span class:list={['chip', s.ok ? 'chip-ok' : 'chip-warn']}>{s.ok ? s.on : s.off}</span></li>)}
+        <li title="Demandes de téléphone ou d'email refusées sur 7 jours (plus de 30 par heure depuis une même adresse)"><span>Anti-aspiration</span><span class:list={['chip', blocks.hits ? 'chip-warn' : 'chip-ok']}>{blocks.hits ? `${blocks.hits} refus · ${blocks.ips} IP` : 'aucun blocage'}</span></li>
+      </ul>
+    </section>
+
+    <section class="panel box wide">
+      <div class="card-h"><h2>Activité récente</h2></div>
+      <table class="mini">
+        <tbody>{activity.map((a) => <tr><td class="muted nowrap">{paris(a.created_at)}</td><td><code>{a.action}</code></td><td class="muted">{a.target}</td><td class="r">{a.email ?? 'système'}</td></tr>)}</tbody>
+      </table>
+    </section>
+  </div>
+</Admin>
+
+<style>
+  .kpis { display: grid; gap: .9rem; grid-template-columns: repeat(auto-fill, minmax(12.5rem, 1fr)); margin-bottom: 1.25rem; }
+  .kpi { display: grid; grid-template-columns: auto 1fr; grid-template-areas: 'ic l' 'v v' 's s'; gap: .25rem .7rem; padding: 1rem 1.1rem; transition: border-color .15s, transform .15s; }
+  .kpi:hover { border-color: #c7d7fe; transform: translateY(-1px); }
+  .k-ic { grid-area: ic; display: grid; place-items: center; width: 34px; height: 34px; border-radius: 10px; background: #eef0ff; color: var(--accent); }
+  .k-l { grid-area: l; align-self: center; color: #667085; font-size: .82rem; font-weight: 600; }
+  .k-v { grid-area: v; font-size: 1.7rem; font-weight: 800; letter-spacing: -0.02em; margin-top: .4rem; }
+  .k-s { grid-area: s; color: #667085; font-size: .78rem; }
+  .grid { display: grid; gap: 1rem; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .grid > * { min-width: 0; }
+  @media (max-width: 1100px) { .grid { grid-template-columns: minmax(0, 1fr); } }
+  .col { display: grid; gap: 1rem; }
+  .box { padding: 1.15rem 1.25rem; }
+  .wide { grid-column: 1 / -1; }
+  .todo ul { list-style: none; margin: 0; padding: 0; display: grid; gap: .35rem; }
+  .todo a { display: flex; align-items: center; gap: .75rem; padding: .6rem .7rem; border-radius: 10px; border: 1px solid #eef0f5; }
+  .todo a:hover { background: #fafaff; border-color: #dfe3f5; }
+  .t-ic { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 9px; flex: none; }
+  .t-ic.warn { background: #fffaeb; color: #b54708; } .t-ic.pro { background: #eff4ff; color: #1d4ed8; } .t-ic.err { background: #fef3f2; color: #b42318; }
+  .t-txt { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .t-txt strong { font-size: .92rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .t-txt small { color: #667085; font-size: .78rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .t-go { color: #98a2b3; }
+  .empty { display: flex; gap: .5rem; align-items: center; color: #067647; margin: 0; }
+  .c-total { font-size: 1.3rem; }
+  .bars { display: flex; align-items: flex-end; gap: 3px; height: 90px; }
+  .bars span { flex: 1; border-radius: 3px 3px 0 0; background: linear-gradient(180deg, var(--accent-2), var(--accent)); }
+  .bars span.zero { background: #eaecf0; }
+  .bars-x { display: flex; justify-content: space-between; margin-top: .4rem; color: #98a2b3; font-size: .72rem; }
+  .mini { width: 100%; border-collapse: collapse; font-size: .88rem; }
+  .mini td { padding: .5rem .3rem; border-bottom: 1px solid #f0f1f5; }
+  .mini tr:last-child td { border-bottom: 0; }
+  .mini a { color: var(--accent); font-weight: 600; }
+  .mini code { font-size: .8rem; background: #f2f4f7; padding: .1rem .35rem; border-radius: 5px; }
+  .r { text-align: right; white-space: nowrap; }
+  .nowrap { white-space: nowrap; }
+  .svc { list-style: none; margin: 0; padding: 0; display: grid; gap: .6rem; }
+  .svc li { display: flex; justify-content: space-between; align-items: center; font-size: .92rem; }
+</style>

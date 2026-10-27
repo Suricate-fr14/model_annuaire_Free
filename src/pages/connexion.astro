@@ -1,0 +1,55 @@
+---
+import Base from '../layouts/Base.astro';
+import { SITE } from '../config';
+import { checkCredentials, startSession, rateLimited, clientIp, safeNext } from '../lib/auth';
+import { flash } from '../lib/flash';
+import { queueEvent } from '../lib/analytics';
+
+const next = safeNext(Astro.url.searchParams.get('next'), '/compte');
+if (Astro.locals.user) return Astro.redirect(next);
+
+let error = '';
+let email = '';
+if (Astro.request.method === 'POST') {
+  const f = await Astro.request.formData();
+  email = String(f.get('email') ?? '').trim().toLowerCase();
+  const ip = clientIp(Astro.request, Astro.clientAddress);
+  if (rateLimited(`login:${ip}`, 10, 15 * 60e3) || rateLimited(`login:${email}`, 6, 15 * 60e3)) {
+    error = 'Trop de tentatives. Patientez quelques minutes.';
+  } else {
+    const user = checkCredentials(email, String(f.get('password') ?? ''));
+    if (user) {
+      startSession(Astro.cookies, user.id);
+      flash(Astro.cookies, 'ok', `Bonjour ${user.name || user.email} !`);
+      queueEvent(Astro.cookies, 'login', { method: 'email' });
+      return Astro.redirect(user.role === 'admin' && next === '/compte' ? '/admin' : next);
+    }
+    error = 'Email ou mot de passe incorrect.';
+  }
+}
+---
+<Base title={`Connexion | ${SITE.fullName}`} noindex>
+  <div class="wrap auth">
+    <div class="panel">
+      <h1>Connexion</h1>
+      <p class="muted">Accédez à votre espace pour gérer vos fiches.</p>
+      {error && <div class="errors" role="alert"><p>{error}</p></div>}
+      <form method="post" class="form">
+        <label class="field"><span>Email</span><input name="email" type="email" required value={email} autocomplete="email" autofocus /></label>
+        <label class="field"><span>Mot de passe</span><input name="password" type="password" required autocomplete="current-password" /></label>
+        <button class="btn gradient-bg" type="submit">Se connecter</button>
+      </form>
+      <p class="alt"><a href="/mot-de-passe-oublie">Mot de passe oublié ?</a></p>
+      <p class="alt">Pas encore de compte ? <a href={`/inscription?next=${encodeURIComponent(next)}`}>Créer un compte</a></p>
+    </div>
+  </div>
+</Base>
+
+<style>
+  .auth { max-width: 28rem; padding-top: 3rem; }
+  h1 { margin: 0 0 .4rem; font-size: 1.7rem; }
+  .form { margin-top: 1.25rem; }
+  .errors { margin-top: 1rem; } .errors p { margin: 0; }
+  .alt { margin: 1rem 0 0; text-align: center; color: var(--muted); }
+  .alt a { color: var(--accent); font-weight: 600; }
+</style>

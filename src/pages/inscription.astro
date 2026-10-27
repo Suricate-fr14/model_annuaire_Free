@@ -1,0 +1,65 @@
+---
+import Base from '../layouts/Base.astro';
+import { SITE } from '../config';
+import { createUser, findUserByEmail, startSession, passwordProblem, rateLimited, clientIp, safeNext } from '../lib/auth';
+import { emailValid } from '../lib/text';
+import { send } from '../lib/mail';
+import { welcome } from '../lib/emails';
+import { flash } from '../lib/flash';
+import { queueEvent } from '../lib/analytics';
+
+const next = safeNext(Astro.url.searchParams.get('next'), '/compte/fiches/nouvelle');
+if (Astro.locals.user) return Astro.redirect(next);
+
+let errors: string[] = [];
+let values = { name: '', email: '' };
+if (Astro.request.method === 'POST') {
+  const f = await Astro.request.formData();
+  values = { name: String(f.get('name') ?? '').trim().slice(0, 80), email: String(f.get('email') ?? '').trim().toLowerCase().slice(0, 120) };
+  const password = String(f.get('password') ?? '');
+  if (String(f.get('website_hp') ?? '')) errors.push('Envoi refusé.'); // champ piège anti-robots
+  if (rateLimited(`signup:${clientIp(Astro.request, Astro.clientAddress)}`, 8, 3600e3)) errors.push('Trop de tentatives, réessayez plus tard.');
+  if (values.name.length < 2) errors.push('Indiquez votre nom.');
+  if (!emailValid(values.email)) errors.push('Adresse email invalide.');
+  const pw = passwordProblem(password);
+  if (pw) errors.push(pw);
+  if (f.get('cgu') !== 'on') errors.push("Vous devez accepter les conditions d'utilisation.");
+  if (!errors.length && findUserByEmail(values.email)) errors.push('Un compte existe déjà avec cet email. Connectez-vous ou réinitialisez votre mot de passe.');
+  if (!errors.length) {
+    const id = createUser(values.email, password, values.name);
+    startSession(Astro.cookies, id);
+    await send(values.email, welcome(values.name));
+    flash(Astro.cookies, 'ok', 'Compte créé, bienvenue !');
+    queueEvent(Astro.cookies, 'sign_up', { method: 'email' });
+    return Astro.redirect(next);
+  }
+}
+---
+<Base title={`Créer un compte | ${SITE.fullName}`} noindex>
+  <div class="wrap auth">
+    <div class="panel">
+      <h1>Créer un compte</h1>
+      <p class="muted">Gratuit. Il vous permet de créer, revendiquer et gérer la fiche de votre établissement.</p>
+      {errors.length > 0 && <div class="errors" role="alert"><ul>{errors.map((e) => <li>{e}</li>)}</ul></div>}
+      <form method="post" class="form">
+        <label class="field"><span>Votre nom</span><input name="name" required value={values.name} autocomplete="name" /></label>
+        <label class="field"><span>Email</span><input name="email" type="email" required value={values.email} autocomplete="email" /></label>
+        <label class="field"><span>Mot de passe</span><input name="password" type="password" required minlength="10" autocomplete="new-password" /><small>10 caractères minimum.</small></label>
+        <label class="hp" aria-hidden="true">Ne pas remplir <input name="website_hp" tabindex="-1" autocomplete="off" /></label>
+        <label class="check"><input type="checkbox" name="cgu" required /> <span>J'accepte les <a href="/cgu" target="_blank">conditions d'utilisation</a> et la <a href="/confidentialite" target="_blank">politique de confidentialité</a>.</span></label>
+        <button class="btn gradient-bg" type="submit">Créer mon compte</button>
+      </form>
+      <p class="alt">Déjà inscrit ? <a href={`/connexion?next=${encodeURIComponent(next)}`}>Se connecter</a></p>
+    </div>
+  </div>
+</Base>
+
+<style>
+  .auth { max-width: 30rem; padding-top: 3rem; }
+  h1 { margin: 0 0 .4rem; font-size: 1.7rem; }
+  .form { margin-top: 1.25rem; }
+  .errors { margin-top: 1rem; }
+  .check a, .alt a { color: var(--accent); font-weight: 600; }
+  .alt { margin: 1.25rem 0 0; text-align: center; color: var(--muted); }
+  .hp { position: absolute; left: -9999px; }
+</style>

@@ -1,0 +1,71 @@
+---
+import Base from '../../layouts/Base.astro';
+import { SITE, ENV } from '../../config';
+import { getFicheBySlug } from '../../lib/fiches';
+import { get, run, audit } from '../../lib/db';
+import { notifyAdmins } from '../../lib/mail';
+import { flash } from '../../lib/flash';
+import { queueEvent } from '../../lib/analytics';
+import { phoneValid } from '../../lib/text';
+import { readIntent, intentLabel } from '../../lib/intent';
+
+const f = getFicheBySlug(Astro.params.slug ?? '');
+if (!f || f.status !== 'published') return new Response('Fiche introuvable', { status: 404 });
+const user = Astro.locals.user;
+const intent = readIntent(Astro.url);
+if (!user) return Astro.redirect(`/inscription?next=${encodeURIComponent(Astro.url.pathname + Astro.url.search)}`);
+if (f.owner_id === user.id) return Astro.redirect(`/compte/fiches/${f.id}`);
+
+const pending = get('SELECT id FROM claims WHERE fiche_id = ? AND user_id = ? AND status = ?', f.id, user.id, 'pending');
+let errors: string[] = [];
+if (Astro.request.method === 'POST' && !f.owner_id && !pending) {
+  const form = await Astro.request.formData();
+  const role = String(form.get('role') ?? '').trim().slice(0, 80);
+  const phone = String(form.get('phone') ?? '').trim().slice(0, 30);
+  const message = String(form.get('message') ?? '').trim().slice(0, 1500);
+  if (!role) errors.push('Indiquez votre fonction.');
+  if (!phoneValid(phone)) errors.push('Indiquez un téléphone valide pour que nous puissions vérifier votre demande.');
+  if (form.get('certify') !== 'on') errors.push("Vous devez certifier être habilité à représenter l'établissement.");
+  if (!errors.length) {
+    const r = run('INSERT INTO claims (fiche_id, user_id, role, phone, message, wanted_plan, wanted_interval) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      f.id, user.id, role, phone, message, intent?.plan ?? '', intent?.interval ?? '');
+    audit(user.id, 'claim.create', String(f.id));
+    queueEvent(Astro.cookies, 'claim_fiche', { fiche_id: f.id, wanted_plan: intent?.plan ?? '' });
+    await notifyAdmins(`Revendication : ${f.name}`, `${user.name} (${user.email}, ${role}, ${phone}) revendique « ${f.name} »${intent ? ` (formule souhaitée : ${intentLabel(intent)})` : ''}.\n\n${message}\n\n${ENV.siteUrl}/admin/revendications#c${r.lastInsertRowid}`);
+    flash(Astro.cookies, 'ok', 'Demande envoyée. Nous vérifions votre lien avec l’établissement (généralement sous 48 h) et vous prévenons par email.');
+    return Astro.redirect('/compte');
+  }
+}
+---
+<Base title={`Revendiquer ${f.name} | ${SITE.fullName}`} noindex>
+  <div class="wrap narrow">
+    <header class="page-head">
+      <h1>Revendiquer « {f.name} »</h1>
+      <p>{[f.street, f.city].filter(Boolean).join(', ')}</p>
+    </header>
+    {f.owner_id ? (
+      <div class="panel"><p>Cette fiche est déjà gérée par un professionnel. S'il s'agit d'une erreur, <a href={`/signaler/${f.slug}`}>signalez-le</a>.</p></div>
+    ) : pending ? (
+      <div class="panel"><p>Votre demande est en cours d'examen. Vous serez prévenu par email.</p><a class="btn btn-ghost" href="/compte">Mon espace</a></div>
+    ) : (
+      <form method="post" class="panel form">
+        {intent && <p class="intent">Formule choisie : <strong>{intentLabel(intent)}</strong>. Le lien de paiement vous sera envoyé dès que la revendication sera acceptée.</p>}
+        <p class="muted">Pour éviter les usurpations, chaque demande est vérifiée par notre équipe (appel au numéro de l'établissement ou justificatif). Une fois acceptée, vous pourrez modifier la fiche librement.</p>
+        {errors.length > 0 && <div class="errors" role="alert"><ul>{errors.map((e) => <li>{e}</li>)}</ul></div>}
+        <div class="row2">
+          <label class="field"><span>Votre fonction</span><input name="role" required placeholder="Gérant, propriétaire, responsable communication…" /></label>
+          <label class="field"><span>Téléphone où vous joindre</span><input name="phone" type="tel" required /></label>
+        </div>
+        <label class="field"><span>Message <small>(facultatif : SIRET, lien vers un justificatif…)</small></span><textarea name="message" rows="4"></textarea></label>
+        <label class="check"><input type="checkbox" name="certify" required /> Je certifie être habilité à représenter cet établissement.</label>
+        <div><button class="btn gradient-bg" type="submit">Envoyer la demande</button></div>
+      </form>
+    )}
+  </div>
+</Base>
+
+<style>
+  .narrow { max-width: 44rem; }
+  .panel a:not(.btn) { color: var(--accent); font-weight: 600; }
+  .intent { margin: 0; padding: .7rem 1rem; border-radius: 12px; background: color-mix(in srgb, #f59e0b 16%, var(--surface)); font-size: .92rem; }
+</style>

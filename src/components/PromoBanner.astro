@@ -1,0 +1,29 @@
+---
+// Offres promotionnelles en cours (Admin > Facturation) : codes à saisir sur la page de paiement Stripe.
+import { activePromos, promoLabel } from '../lib/promos';
+import type { PlanKey } from '../config';
+
+interface Props { plan?: PlanKey }
+const promos = activePromos(Astro.props.plan);
+---
+{promos.length > 0 && (
+  <div class="promo-banner" role="note">
+    <span class="k">{promos.length > 1 ? 'Offres du moment' : 'Offre du moment'}</span>
+    <ul>
+      {promos.map((p) => <li>{promoLabel(p)} avec le code <strong class="code">{p.code}</strong></li>)}
+    </ul>
+    <span class="hint">Code à saisir sur la page de paiement.</span>
+  </div>
+)}
+
+<style>
+  .promo-banner {
+    display: flex; flex-wrap: wrap; gap: .4rem 1rem; align-items: center; margin: 0 0 1.2rem; padding: .8rem 1rem;
+    border: 1px dashed color-mix(in srgb, #e11d48 45%, var(--line)); border-radius: 12px;
+    background: color-mix(in srgb, #e11d48 6%, var(--surface)); font-size: .95rem;
+  }
+  ul { margin: 0; padding: 0; list-style: none; display: grid; gap: .2rem; }
+  .hint { color: var(--muted); font-size: .85rem; }
+  .k { padding: .2rem .6rem; border-radius: 999px; background: #e11d48; color: #fff; font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
+  .code { padding: .05rem .45rem; border-radius: 6px; background: var(--surface); border: 1px solid var(--line); letter-spacing: .05em; }
+</style>

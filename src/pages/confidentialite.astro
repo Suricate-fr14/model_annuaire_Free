@@ -1,0 +1,57 @@
+---
+import Legal from '../layouts/Legal.astro';
+import { SITE } from '../config';
+import { settings } from '../lib/settings';
+const L = SITE.legal;
+const tracking = !!settings().gtm_id;
+---
+<Legal title="Politique de confidentialité" description={`Données personnelles, cookies et droits RGPD sur l'${SITE.fullName}.`}>
+  <h2>Responsable du traitement</h2>
+  <p>{L.company} ({L.form}), {L.address}, représentée par {L.director}. Contact : <a href={`mailto:${L.email}`}>{L.email}</a>.</p>
+
+  <h2>Données traitées et finalités</h2>
+  <table>
+    <thead><tr><th>Données</th><th>Finalité</th><th>Base légale</th><th>Conservation</th></tr></thead>
+    <tbody>
+      <tr><td>Compte : nom, email, mot de passe (stocké chiffré, jamais en clair)</td><td>Accès à l'espace professionnel</td><td>Contrat</td><td>Jusqu'à la suppression du compte</td></tr>
+      <tr><td>Fiche : informations professionnelles publiées</td><td>Publication dans l'annuaire</td><td>Contrat</td><td>Tant que la fiche est en ligne</td></tr>
+      <tr><td>Revendication : fonction, téléphone, message</td><td>Vérifier le lien avec l'établissement</td><td>Intérêt légitime</td><td>3 ans</td></tr>
+      <tr><td>Demande de contact (formulaire « Demander un devis » d'une fiche) : nom, téléphone, email, code postal, message</td><td>Transmettre votre demande au professionnel concerné, après vérification</td><td>Consentement</td><td>3 ans, ou jusqu'à votre demande de suppression</td></tr>
+      <tr><td>Signalement : message, email facultatif</td><td>Corriger les fiches</td><td>Intérêt légitime</td><td>3 ans</td></tr>
+      <tr><td>Abonnement : identifiants client et d'abonnement Stripe</td><td>Facturation des formules Pro et Premium</td><td>Contrat, obligation légale</td><td>10 ans (pièces comptables)</td></tr>
+      <tr><td>Statistiques : nombre de vues et de clics par fiche, sans identification des visiteurs</td><td>Statistiques des professionnels</td><td>Intérêt légitime</td><td>Durée de vie de la fiche</td></tr>
+      {tracking && <tr><td>Mesure d'audience : pages vues, recherches, clics, identifiant aléatoire du navigateur</td><td>Comprendre l'utilisation de l'annuaire et l'améliorer</td><td>Consentement</td><td>14 mois (Google Analytics)</td></tr>}
+      <tr><td>Adresse IP (en mémoire, quelques heures au plus)</td><td>Limiter les abus (connexion, formulaires)</td><td>Intérêt légitime</td><td>Non conservée en base</td></tr>
+    </tbody>
+  </table>
+  <p>Les fiches d'établissements contiennent des informations professionnelles (nom commercial, adresse, téléphone). Celles des entrepreneurs individuels peuvent constituer des données personnelles : la personne concernée peut en demander la rectification ou la suppression à tout moment.</p>
+
+  <h2>Destinataires et sous-traitants</h2>
+  <p>Les données ne sont ni vendues ni louées. Une demande de contact est transmise au seul professionnel de la fiche concernée, après vérification par l'équipe de l'annuaire. Elles sont accessibles à l'équipe de l'annuaire et aux sous-traitants suivants, pour les seuls besoins du service : {L.host.name} (hébergement), Stripe (paiement : les données bancaires sont saisies directement chez Stripe et ne transitent pas par l'annuaire), Resend (envoi des emails){tracking && ', Google (Google Tag Manager et Google Analytics, uniquement si vous acceptez la mesure d’audience)'}. Certains de ces prestataires peuvent traiter des données hors de l'Union européenne, avec les garanties prévues par le RGPD (clauses contractuelles types ou décision d'adéquation).</p>
+
+  <h2 id="cookies">Cookies</h2>
+  <table>
+    <thead><tr><th>Cookie</th><th>Rôle</th><th>Durée</th></tr></thead>
+    <tbody>
+      <tr><td><code>sid</code></td><td>Session : vous garder connecté à votre espace</td><td>30 jours</td></tr>
+      <tr><td><code>flash</code></td><td>Afficher un message de confirmation après une action</td><td>1 minute</td></tr>
+      <tr><td><code>ev</code></td><td>Transmettre une action réalisée (inscription, création de fiche) à la page suivante</td><td>5 minutes</td></tr>
+      {tracking && <tr><td><code>cookie-consent</code> (stockage local)</td><td>Mémoriser votre choix sur la mesure d'audience</td><td>13 mois (6 mois en cas de refus)</td></tr>}
+      {tracking && <tr><td><code>_ga</code>, <code>_ga_*</code></td><td>Mesure d'audience Google Analytics, <strong>uniquement après votre accord</strong></td><td>13 mois</td></tr>}
+    </tbody>
+  </table>
+  {tracking
+    ? <p>Les cookies <code>sid</code>, <code>flash</code> et <code>ev</code> sont strictement nécessaires et ne requièrent pas de consentement. Les cookies de mesure d'audience ne sont déposés que si vous les acceptez dans le bandeau ; vous pouvez changer d'avis à tout moment : <button type="button" class="linkish" onclick="document.documentElement.classList.add('ask-consent')">gérer les cookies</button>. L'annuaire n'utilise aucun cookie publicitaire.</p>
+    : <p>Ces cookies sont strictement nécessaires au fonctionnement du site et ne requièrent pas de consentement. L'annuaire n'utilise ni cookie publicitaire ni outil de mesure d'audience tiers.</p>}
+  <p>Les cartes Google Maps affichées sur les fiches Pro et Premium peuvent déposer des cookies propres à Google lors de leur affichage (voir <a href="/sources-et-donnees">Sources des données</a>).</p>
+
+  <h2>Vos droits</h2>
+  <p>Vous disposez d'un droit d'accès, de rectification, d'effacement, de limitation, d'opposition et de portabilité de vos données. Vous pouvez supprimer vous-même votre compte depuis « Mon compte > Paramètres ». Pour toute autre demande : <a href={`mailto:${L.email}`}>{L.email}</a> (réponse sous un mois). Vous pouvez également introduire une réclamation auprès de la <a href="https://www.cnil.fr/fr/plaintes" rel="noopener">CNIL</a>.</p>
+
+  <h2>Sécurité</h2>
+  <p>Mots de passe hachés (scrypt), connexion chiffrée (HTTPS), sessions révocables, limitation des tentatives de connexion, contrôle d'origine des formulaires et vérification des fichiers envoyés.</p>
+</Legal>
+
+<style>
+  .linkish { padding: 0; border: 0; background: none; font: inherit; color: var(--accent); text-decoration: underline; cursor: pointer; }
+</style>

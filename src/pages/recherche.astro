@@ -1,0 +1,68 @@
+---
+import Base from '../layouts/Base.astro';
+import SearchBar from '../components/SearchBar.astro';
+import FicheRow from '../components/FicheRow.astro';
+import Pagination from '../components/Pagination.astro';
+import { SITE } from '../config';
+import { listFiches, matchAll, stats } from '../lib/fiches';
+import { getUniverse, universeUrl } from '../lib/taxonomy';
+import { openState } from '../lib/hours';
+import { plural } from '../lib/text';
+
+const p = Astro.url.searchParams;
+const q = (p.get('q') ?? '').slice(0, 100);
+const universe = getUniverse(p.get('univers') ?? '') ? p.get('univers')! : '';
+const city = p.get('ville') ?? '';
+const openNow = p.get('ouvert') === '1';
+const page = Math.max(1, Number(p.get('page')) || 1);
+const per = SITE.perPage;
+
+let items, total;
+if (openNow) {
+  // « Ouvert maintenant » dépend de l'heure : filtré en JS sur l'ensemble des résultats.
+  const open = matchAll({ q, universe, city }).filter((f) => openState(f.hours, SITE.timezone)?.open);
+  total = open.length;
+  items = open.slice((page - 1) * per, page * per);
+} else {
+  ({ items, total } = listFiches({ q, universe, city, limit: per, offset: (page - 1) * per }));
+}
+const cityName = stats().cities.find((c) => c.city_slug === city)?.city;
+const u = universe ? getUniverse(universe) : null;
+const filters = [q && `« ${q} »`, u?.name, cityName && `à ${cityName}`, openNow && 'ouvert maintenant'].filter(Boolean).join(' · ');
+---
+<Base title={`${q ? `${q} : ` : ''}recherche${cityName ? ` à ${cityName}` : ''} | ${SITE.fullName}`} noindex pageType="SearchResultsPage"
+  events={page === 1 ? [{ event: 'search', search_term: q, search_city: cityName ?? '', search_universe: u?.name ?? '', search_open_now: openNow, results_count: total }] : []}>
+  <div class="wrap">
+    <header class="page-head">
+      <h1>{q ? <>Résultats pour « {q} »</> : 'Rechercher un professionnel'}</h1>
+      <p aria-live="polite">{plural(total, 'résultat')}{filters && ` · ${filters}`}</p>
+    </header>
+    <SearchBar q={q} universe={universe} city={city} open={openNow} />
+
+    {items.length ? (
+      <>
+        <ul class="list panel">{items.map((f) => <FicheRow fiche={f} />)}</ul>
+        <Pagination page={page} total={total} perPage={per} url={Astro.url} />
+      </>
+    ) : (
+      <div class="empty panel">
+        <p class="t">Aucun établissement ne correspond.</p>
+        <p class="muted">Essayez un terme plus général (« boulangerie » plutôt que le nom exact), retirez un filtre ou parcourez les catégories.</p>
+        <p class="actions">
+          <a class="btn btn-ghost" href="/recherche">Réinitialiser</a>
+          <a class="btn btn-ghost" href={u ? universeUrl(u) : '/univers'}>Parcourir les catégories</a>
+        </p>
+        <p class="muted small">Votre établissement n'apparaît pas ? <a href="/creer-ma-fiche">Créez sa fiche gratuitement</a>.</p>
+      </div>
+    )}
+  </div>
+</Base>
+
+<style>
+  .list { list-style: none; margin: 1.5rem 0 0; padding: .5rem; }
+  .empty { margin-top: 1.5rem; text-align: center; padding: 2.5rem 1rem; }
+  .t { font-weight: 700; font-size: 1.15rem; margin: 0; }
+  .actions { display: flex; flex-wrap: wrap; justify-content: center; gap: .5rem; }
+  .small { font-size: .9rem; }
+  .small a { color: var(--accent); font-weight: 600; }
+</style>

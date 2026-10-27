@@ -1,0 +1,858 @@
+---
+// Formulaire complet de fiche (création / édition). Les champs Pro sont verrouillés hors abonnement.
+import Icon from './Icon.astro';
+import { universes } from '../lib/taxonomy';
+import { DAYS, DAY_LABELS, type Hours } from '../lib/hours';
+import { NETWORKS } from '../lib/social';
+import { FEATURES, LANGUAGES } from '../lib/features';
+import { SITE, PLANS, planLabel, ENV, CITY } from '../config';
+import { SEO_TITLE_MAX, SEO_DESC_MAX } from '../lib/ficheForm';
+import { defaultTitle, defaultDescription } from '../lib/seo';
+import { template, siteVars, DESC_MAX } from '../lib/seoTemplates';
+import SeoVarChips from './SeoVarChips.astro';
+import { INDEX_MODES, MAX_REFS } from '../lib/fiches';
+import { MAX_VIDEOS, youtubeUrl } from '../lib/video';
+
+interface Props {
+  values?: Partial<{
+    name: string; kind: string; category: string; short_desc: string; description: string; street: string; postcode: string;
+    city: string; lat: number | null; lng: number | null; phone: string; email: string; website: string; siret: string;
+    hours: Hours | null; hours_note: string; socials: Record<string, string>; features: string[]; logo: string; photos: string[];
+    videos: string[]; leads_enabled: boolean; banner: string; refs: { logo: string; name: string }[];
+    news_title: string; news_text: string; news_link: string; news_until: string; price_from: string;
+    founded: string; area_served: string; credentials: string; languages: string[];
+  }>;
+  pro: boolean;
+  /** Vidéos et formulaire de demande de contact (Premium). */
+  premium?: boolean;
+  errors?: string[];
+  submitLabel: string;
+  upgradeUrl?: string;
+  isNew?: boolean;
+  /** Formulaire admin : affiche le choix de l'indexation. */
+  admin?: boolean;
+  /** La fiche est-elle actuellement indexable (pour le message de la section SEO) ? */
+  indexable?: boolean;
+  maxPhotos?: number;
+  /** Fiche existante : la galerie s'enregistre aussitôt (ajout de plusieurs photos, suppression avec confirmation). */
+  ficheId?: number;
+}
+const { values: v = {}, pro, premium = false, errors = [], submitLabel, upgradeUrl, isNew = false, maxPhotos = PLANS.pro.photos, admin = false, indexable = false, ficheId } = Astro.props;
+const seoBase = { name: v.name || 'Votre établissement', city: v.city || CITY.name, category: v.category || '', short_desc: v.short_desc || '' };
+const slugPreview = (v as any).slug ? `/${(v as any).slug}` : '/votre-fiche';
+const hours = v.hours ?? null;
+const hoursMode = isNew && !hours ? 'set' : hours?.always ? 'always' : hours ? 'set' : 'none';
+const defaultRanges: Record<string, [string, string][]> = { mo: [['09:00', '12:00'], ['14:00', '18:00']], tu: [], we: [], th: [], fr: [], sa: [['09:00', '12:00']], su: [] };
+for (const d of ['tu', 'we', 'th', 'fr']) defaultRanges[d] = defaultRanges.mo;
+const ranges = (d: string): [string, string][] => (hours && !hours.always ? ((hours as any)[d] ?? []) : isNew ? defaultRanges[d] : []);
+const socials = v.socials ?? {};
+const features = new Set(v.features ?? []);
+const languages = new Set(v.languages ?? []);
+---
+<form class="fiche-form" method="post" enctype="multipart/form-data" novalidate data-fiche-form data-default-city={CITY.name} data-fiche-id={ficheId}>
+  {ficheId && (
+    <dialog class="confirm" data-dlg>
+      <img alt="" data-dlg-img />
+      <p><strong data-dlg-title>Supprimer cette image ?</strong><br />Elle est retirée de votre fiche immédiatement.</p>
+      <div class="confirm-actions">
+        <button type="button" class="btn btn-ghost btn-sm" data-dlg-no>Annuler</button>
+        <button type="button" class="btn btn-danger btn-sm" data-dlg-yes>Supprimer</button>
+      </div>
+    </dialog>
+  )}
+  {errors.length > 0 && (
+    <div class="errors" role="alert" tabindex="-1" data-errors>
+      <p>Merci de corriger les points suivants :</p>
+      <ul>{errors.map((e) => <li>{e}</li>)}</ul>
+    </div>
+  )}
+
+  <nav class="steps" aria-label="Sections du formulaire">
+    <a href="#s-activite">1. Activité</a><a href="#s-adresse">2. Adresse</a><a href="#s-contact">3. Contact</a>
+    <a href="#s-horaires">4. Horaires</a><a href="#s-presentation">5. Présentation</a><a href="#s-reseaux">6. Réseaux</a><a href="#s-pro">7. Bannière & photos</a><a href="#s-premium">8. Vidéos & leads</a><a href="#s-seo">9. Référencement</a>
+  </nav>
+
+  <fieldset class="panel" id="s-activite">
+    <legend>1. Votre activité</legend>
+    <div class="row2">
+      <label class="field"><span>Nom de l'établissement *</span><input name="name" required maxlength="120" value={v.name} autocomplete="organization" /></label>
+      <div class="field">
+        <span>Vous êtes</span>
+        <div class="radios">
+          <label class="check"><input type="radio" name="kind" value="organization" checked={v.kind !== 'person'} /> Une entreprise / un commerce</label>
+          <label class="check"><input type="radio" name="kind" value="person" checked={v.kind === 'person'} /> Un indépendant</label>
+        </div>
+      </div>
+    </div>
+    <label class="field">
+      <span>Catégorie *</span>
+      <input type="search" class="input cat-filter" placeholder="Filtrer les catégories (ex. coiffeur, plombier…)" data-cat-filter aria-label="Filtrer les catégories" />
+      <select name="category" required data-cat-select size="1">
+        <option value="">— Choisir une catégorie —</option>
+        {universes.map((u) => (
+          <optgroup label={u.name}>
+            {u.categories.map((c) => <option value={c.slug} selected={c.slug === v.category}>{c.name}</option>)}
+          </optgroup>
+        ))}
+      </select>
+    </label>
+  </fieldset>
+
+  <fieldset class="panel" id="s-adresse">
+    <legend>2. Adresse</legend>
+    <label class="field addr-search">
+      <span>Rechercher l'adresse</span>
+      <input type="search" class="input" placeholder={`Ex. 12 rue de la République ${CITY.name}`} autocomplete="off" data-addr-input />
+      <ul class="addr-list" hidden data-addr-list></ul>
+      <small>Choisissez une proposition : la rue, le code postal, la ville et la position sur la carte seront remplis automatiquement.</small>
+    </label>
+    <div class="row2">
+      <label class="field"><span>N° et rue</span><input name="street" maxlength="160" value={v.street} data-addr="street" autocomplete="address-line1" /></label>
+      <label class="field"><span>Code postal</span><input name="postcode" maxlength="5" inputmode="numeric" value={v.postcode} data-addr="postcode" autocomplete="postal-code" /></label>
+      <label class="field"><span>Ville *</span><input name="city" required maxlength="80" value={v.city} data-addr="city" autocomplete="address-level2" /></label>
+    </div>
+    <input type="hidden" name="lat" value={v.lat ?? ''} data-addr="lat" />
+    <input type="hidden" name="lng" value={v.lng ?? ''} data-addr="lng" />
+    <div class="mini-map" data-map hidden={v.lat == null}>
+      {v.lat != null && <iframe title="Position" src={`https://maps.google.com/maps?q=${v.lat},${v.lng}&z=16&output=embed`} loading="lazy"></iframe>}
+    </div>
+    <small class="hint" data-geo-state>{v.lat != null ? `Position : ${Number(v.lat).toFixed(5)}, ${Number(v.lng).toFixed(5)}` : 'Position calculée automatiquement à partir de l\'adresse.'}</small>
+  </fieldset>
+
+  <fieldset class="panel" id="s-contact">
+    <legend>3. Contact</legend>
+    <div class="row2">
+      <label class="field"><span>Téléphone</span><input name="phone" type="tel" maxlength="30" value={v.phone} autocomplete="tel" placeholder="02 31 00 00 00" /></label>
+      <label class="field"><span>Email de contact public</span><input name="email" type="email" maxlength="120" value={v.email} placeholder="contact@exemple.fr" /></label>
+      <label class="field"><span>SIRET <small>(facultatif)</small></span><input name="siret" maxlength="17" inputmode="numeric" value={v.siret} placeholder="14 chiffres" /></label>
+    </div>
+    {!pro && <small class="hint"><Icon name="lock" size={13} /> Le téléphone et l'email sont affichés sur la fiche avec les formules Pro et Premium. Renseignez-les dès maintenant : ils apparaîtront dès l'activation.{upgradeUrl && <> <a href={upgradeUrl}>Choisir une formule</a></>}</small>}
+  </fieldset>
+
+  <fieldset class="panel" id="s-horaires">
+    <legend>4. Horaires d'ouverture</legend>
+    <div class="radios" data-hours-mode>
+      <label class="check"><input type="radio" name="h_mode" value="set" checked={hoursMode === 'set'} /> Horaires</label>
+      <label class="check"><input type="radio" name="h_mode" value="always" checked={hoursMode === 'always'} /> Ouvert 24h/24, 7j/7</label>
+      <label class="check"><input type="radio" name="h_mode" value="none" checked={hoursMode === 'none'} /> Non communiqués</label>
+    </div>
+    <input type="checkbox" name="h_always" hidden data-h-always checked={hoursMode === 'always'} />
+    <input type="checkbox" name="h_none" hidden data-h-none checked={hoursMode === 'none'} />
+    <div class="hours-grid" data-hours-grid hidden={hoursMode !== 'set'}>
+      {DAYS.map((d) => {
+        const r = ranges(d);
+        return (
+          <div class="hrow" data-day={d}>
+            <label class="check day"><input type="checkbox" name={`h_${d}_open`} checked={r.length > 0} data-day-open /> {DAY_LABELS[d]}</label>
+            <div class="slots">
+              <span class="slot"><input type="time" name={`h_${d}_1_from`} value={r[0]?.[0] ?? ''} aria-label={`${DAY_LABELS[d]} ouverture`} /> – <input type="time" name={`h_${d}_1_to`} value={r[0]?.[1] ?? ''} aria-label={`${DAY_LABELS[d]} fermeture`} /></span>
+              <span class="slot slot2"><input type="time" name={`h_${d}_2_from`} value={r[1]?.[0] ?? ''} aria-label={`${DAY_LABELS[d]} réouverture`} /> – <input type="time" name={`h_${d}_2_to`} value={r[1]?.[1] ?? ''} aria-label={`${DAY_LABELS[d]} fermeture du soir`} /></span>
+              <span class="closed-txt">Fermé</span>
+            </div>
+          </div>
+        );
+      })}
+      <div class="hours-tools">
+        <button type="button" class="btn btn-ghost btn-sm" data-copy-monday>Copier le lundi sur les jours ouverts</button>
+        <small class="hint">Laissez la 2ᵉ plage vide en cas de journée continue.</small>
+      </div>
+    </div>
+    <label class="field"><span>Précision <small>(facultatif)</small></span><input name="hours_note" maxlength="200" value={v.hours_note} placeholder="Ex. Fermé les jours fériés, horaires d'été en juillet-août" /></label>
+  </fieldset>
+
+  <fieldset class="panel" id="s-presentation">
+    <legend>5. Présentation</legend>
+    <label class="field">
+      <span>Description courte * <small data-count-for="short_desc">0/200</small></span>
+      <input name="short_desc" required maxlength="200" value={v.short_desc} placeholder="Ex. Boulangerie artisanale, pains au levain et pâtisseries maison" data-count />
+    </label>
+    <label class="field">
+      <span>Présentation détaillée <span class="badge badge-pro">Pro & Premium</span> <small data-count-for="description">0/4000</small></span>
+      <textarea name="description" rows="7" maxlength="4000" placeholder={pro ? "Votre histoire, vos produits ou prestations, vos engagements, votre zone d'intervention…" : 'Disponible avec les formules Pro et Premium'} data-count disabled={!pro}>{pro ? v.description : ''}</textarea>
+      {!pro && <small><Icon name="lock" size={13} /> La présentation détaillée et le plan d'accès sur la fiche sont inclus dans les formules Pro et Premium.{upgradeUrl && <> <a href={upgradeUrl}>Choisir une formule</a></>}</small>}
+    </label>
+    <div class="field">
+      <span>Services et équipements</span>
+      <div class="feat-grid">
+        {FEATURES.map((f) => <label class="check"><input type="checkbox" name="features" value={f.key} checked={features.has(f.key)} /> {f.label}</label>)}
+      </div>
+    </div>
+    <div class="row2">
+      <label class="field">
+        <span>Année de création <small>(facultatif)</small></span>
+        <input name="founded" inputmode="numeric" maxlength="4" pattern="\d{4}" value={v.founded ?? ''} placeholder="Ex. 1998" />
+      </label>
+      <label class="field">
+        <span>Zone d'intervention <small>(facultatif)</small></span>
+        <input name="area_served" maxlength="150" value={v.area_served ?? ''} placeholder={`Ex. ${CITY.name} et 30 km alentour, ${CITY.department}`} />
+      </label>
+    </div>
+    <label class="field">
+      <span>Labels et certifications <small>(facultatif, séparés par des virgules)</small></span>
+      <input name="credentials" maxlength="300" value={v.credentials ?? ''} placeholder="Ex. RGE Qualibat, Artisan d'art, Maître restaurateur" />
+      <small class="hint">Indiquez uniquement les labels que vous détenez réellement : ils sont affichés sur la fiche et transmis à Google.</small>
+    </label>
+    <div class="field">
+      <span>Langues parlées <small>(en plus du français)</small></span>
+      <div class="feat-grid">
+        {LANGUAGES.map((l) => <label class="check"><input type="checkbox" name="languages" value={l.key} checked={languages.has(l.key)} /> {l.label}</label>)}
+      </div>
+    </div>
+    <div class="field">
+      <span>Logo ou photo principale <small>(JPG, PNG ou WebP, 10 Mo max)</small></span>
+      <div class="logo-row" data-media="logo" data-saved={v.logo || ''}>
+        <span class="media-box" hidden={!v.logo} data-media-box>
+          <img src={v.logo || ''} alt="" class="logo-prev" data-media-prev />
+          {ficheId && <button type="button" class="thumb-del" data-media-del aria-label="Supprimer le logo" title="Supprimer"><Icon name="trash" size={16} /></button>}
+        </span>
+        <input type="file" name="logo" accept="image/jpeg,image/png,image/webp" data-media-input />
+        {!ficheId && v.logo && <label class="check"><input type="checkbox" name="logo_remove" /> Supprimer le logo actuel</label>}
+      </div>
+    </div>
+  </fieldset>
+
+  <fieldset class="panel" id="s-reseaux">
+    <legend>6. Réseaux sociaux</legend>
+    <p class="hint">Collez l'adresse de votre page, ou votre @identifiant. Champs facultatifs.</p>
+    <div class="row2">
+      {NETWORKS.map((n) => (
+        <label class="field soc-field">
+          <span><Icon name={n.key} size={16} /> {n.label}</span>
+          <input name={`s_${n.key}`} maxlength="300" value={(socials[n.key] ?? '').replace(/^https?:\/\//i, '')} placeholder={n.placeholder} />
+        </label>
+      ))}
+    </div>
+  </fieldset>
+
+  <fieldset class:list={['panel', 'pro-box', { locked: !pro }]} id="s-pro">
+    <legend>7. Bannière, site internet et galerie <span class="badge badge-pro">Pro & Premium</span></legend>
+    {!pro && (
+      <p class="lock-msg">
+        <Icon name="lock" size={16} /> La bannière, le lien vers votre site internet et la galerie photos sont réservés aux formules Pro ({planLabel(PLANS.pro, 'month')}) et Premium.
+        {upgradeUrl ? <a href={upgradeUrl}>Choisir une formule</a> : <span>Vous pourrez souscrire une fois la fiche validée.</span>}
+      </p>
+    )}
+    <div class="field">
+      <span>Bannière <small>(image de couverture en haut de la fiche : format paysage, 1600 × 500 px conseillé, 10 Mo max)</small></span>
+      <div class="banner-row" data-media="banner" data-saved={v.banner || ''}>
+        <span class="media-box" hidden={!v.banner} data-media-box>
+          <img src={v.banner || ''} alt="" class="banner-prev" data-media-prev />
+          {ficheId && <button type="button" class="thumb-del" data-media-del aria-label="Supprimer la bannière" title="Supprimer"><Icon name="trash" size={16} /></button>}
+        </span>
+        <input type="file" name="banner" accept="image/jpeg,image/png,image/webp" disabled={!pro} data-media-input />
+        {!ficheId && v.banner && <label class="check"><input type="checkbox" name="banner_remove" disabled={!pro} /> Supprimer la bannière actuelle</label>}
+      </div>
+      {!pro && v.banner && <small>Votre bannière est enregistrée : elle sera de nouveau affichée dès la réactivation de l'abonnement.</small>}
+    </div>
+    <label class="field">
+      <span>Site internet</span>
+      <input name="website" type="url" maxlength="300" value={pro ? v.website : ''} placeholder="https://www.votre-site.fr" disabled={!pro} />
+      {!pro && v.website && <small>Votre site ({v.website}) est enregistré : il sera de nouveau affiché dès la réactivation de l'abonnement.</small>}
+    </label>
+    <label class="field">
+      <span>Prix « à partir de » <small>(facultatif, en euros TTC)</small></span>
+      <span class="price-in"><input name="price_from" inputmode="decimal" maxlength="12" value={v.price_from ?? ''} placeholder="Ex. 25 ou 12,50" disabled={!pro} /> €</span>
+      <small>Affiché sur la fiche (« À partir de 25 € ») et transmis à Google. Laissez vide si vos tarifs sont sur devis.</small>
+    </label>
+    <div class="field">
+      <span>Galerie photos <small>(JPG, PNG ou WebP, 10 Mo max par photo, {pro ? `${maxPhotos} max` : `${PLANS.pro.photos} avec Pro, ${PLANS.premium.photos} avec Premium`})</small></span>
+      {pro && (v.photos ?? []).length > maxPhotos && (
+        <small class="over">Votre formule affiche {maxPhotos} photos : les {(v.photos ?? []).length - maxPhotos} dernières ne sont pas visibles sur la fiche. Retirez-en ou passez en Premium.</small>
+      )}
+      {ficheId ? (
+        <div class="gallery" data-gallery={ficheId} data-max={maxPhotos}>
+          <div class="thumbs" data-thumbs>
+            {(v.photos ?? []).map((p) => (
+              <figure class="thumb" data-photo={p}>
+                <img src={p} alt="" />
+                <button type="button" class="thumb-del" data-del aria-label="Supprimer cette photo" title="Supprimer"><Icon name="trash" size={16} /></button>
+              </figure>
+            ))}
+          </div>
+          {pro && (
+            <label class="btn btn-ghost btn-sm add-photos" data-add>
+              <input type="file" accept="image/jpeg,image/png,image/webp" multiple data-photos-input /> Ajouter des photos
+            </label>
+          )}
+          {pro && <small class="hint">Sélectionnez plusieurs photos à la fois : elles sont ajoutées aussitôt, sans enregistrer le formulaire.</small>}
+          <p class="gal-msg" data-gal-msg role="status" hidden></p>
+          <template data-thumb-tpl>
+            <figure class="thumb"><img alt="" /><button type="button" class="thumb-del" data-del aria-label="Supprimer cette photo" title="Supprimer"><Icon name="trash" size={16} /></button></figure>
+          </template>
+        </div>
+      ) : (
+        <input type="file" name="photos" accept="image/jpeg,image/png,image/webp" multiple disabled={!pro} />
+      )}
+    </div>
+    <div class="field">
+      <span>Nos références clients <small>(logos de vos clients, {MAX_REFS} max : JPG, PNG ou WebP, fond transparent ou blanc conseillé)</small></span>
+      {ficheId ? (
+        <div class="refs-edit" data-refs data-max={MAX_REFS}>
+          <div class="refs-list" data-refs-list>
+            {(v.refs ?? []).map((r) => (
+              <figure class="ref-item" data-ref={r.logo}><img src={r.logo} alt="" /><figcaption>{r.name}</figcaption><button type="button" class="thumb-del" data-ref-del aria-label="Supprimer cette référence" title="Supprimer"><Icon name="trash" size={16} /></button></figure>
+            ))}
+          </div>
+          {pro && (
+            <div class="ref-add" data-ref-add>
+              <input maxlength="60" placeholder="Nom du client (facultatif)" aria-label="Nom du client" data-ref-name />
+              <label class="btn btn-ghost btn-sm add-photos">
+                <input type="file" accept="image/jpeg,image/png,image/webp" data-ref-input /> Ajouter un logo
+              </label>
+            </div>
+          )}
+          {pro && <small class="hint">Saisissez le nom du client puis choisissez son logo : il est ajouté aussitôt, sans enregistrer le formulaire.</small>}
+          <p class="gal-msg" data-ref-msg role="status" hidden></p>
+          <template data-ref-tpl>
+            <figure class="ref-item busy"><img alt="" /><figcaption></figcaption><button type="button" class="thumb-del" data-ref-del aria-label="Supprimer cette référence" title="Supprimer"><Icon name="trash" size={16} /></button></figure>
+          </template>
+        </div>
+      ) : (
+        <small class="hint">Vous pourrez ajouter les logos de vos clients une fois la fiche créée.</small>
+      )}
+    </div>
+    <div class="news-box">
+      <p class="label">Actualité ou offre du moment <small>(affichée en haut de votre fiche, et signalée dans les listes)</small></p>
+      <div class="row2">
+        <label class="field"><span>Titre</span><input name="news_title" maxlength="80" value={v.news_title} placeholder="Ex. -10 % sur les portraits en octobre" disabled={!pro} /></label>
+        <label class="field"><span>Afficher jusqu'au <small>(facultatif)</small></span><input name="news_until" type="date" value={v.news_until} disabled={!pro} /></label>
+      </div>
+      <label class="field"><span>Détail <small>(400 caractères max)</small></span><textarea name="news_text" rows="2" maxlength="400" placeholder="Conditions, dates, nouveauté, événement…" disabled={!pro}>{v.news_text}</textarea></label>
+      <label class="field"><span>Lien <small>(facultatif : page de l'offre, d'un événement…)</small></span><input name="news_link" type="url" maxlength="300" value={v.news_link} placeholder="https://www.example.com/…" disabled={!pro} /></label>
+      <small class="hint">Laissez le titre vide pour ne rien afficher. Passé la date de fin, l'actualité disparaît automatiquement.</small>
+    </div>
+  </fieldset>
+
+  <fieldset class:list={['panel', 'pro-box', { locked: !premium }]} id="s-premium">
+    <legend>8. Vidéos et demandes de contact <span class="badge badge-pro">Premium</span></legend>
+    {!premium && (
+      <p class="lock-msg">
+        <Icon name="lock" size={16} /> Les vidéos et le formulaire de demande de contact sont réservés à la formule Premium ({planLabel(PLANS.premium, 'month')}).
+        {upgradeUrl ? <a href={upgradeUrl}>Passer en Premium</a> : <span>Vous pourrez souscrire une fois la fiche validée.</span>}
+      </p>
+    )}
+    <div class="field">
+      <span>Vidéos YouTube <small>({MAX_VIDEOS} max : collez le lien de chaque vidéo)</small></span>
+      {[...(v.videos ?? []), ...Array(MAX_VIDEOS).fill('')].slice(0, MAX_VIDEOS).map((id, i) => (
+        <input name={`video_${i + 1}`} type="url" maxlength="300" value={id ? youtubeUrl(id) : ''} placeholder="https://www.youtube.com/watch?v=…" disabled={!premium} aria-label={`Vidéo ${i + 1}`} />
+      ))}
+      {!premium && (v.videos ?? []).length > 0 && <small>Vos vidéos sont enregistrées : elles seront de nouveau affichées avec Premium.</small>}
+    </div>
+    {premium ? (
+      <label class="check leads-opt">
+        <input type="checkbox" name="leads_enabled" checked={!!v.leads_enabled} />
+        <span><strong>J'achète des leads</strong> : afficher sur ma fiche un formulaire « Demander un devis ». Chaque demande est vérifiée par notre équipe avant de vous être transmise par email et dans votre espace (Mes demandes).</span>
+      </label>
+    ) : (
+      <p class="leads-opt"><Icon name="lock" size={14} /> <span><strong>J'achète des leads</strong> (Premium) : un formulaire « Demander un devis » sur votre fiche ; chaque demande est vérifiée par notre équipe avant de vous être transmise.</span></p>
+    )}
+  </fieldset>
+
+  <fieldset class="panel" id="s-seo" data-seo-scope>
+    <legend>9. Référencement Google (SEO)</legend>
+    {!admin && (
+      indexable
+        ? <p class="seo-state ok">Votre fiche est référencée sur Google : personnalisez le titre et la description affichés dans les résultats.</p>
+        : <p class="seo-state">Ces textes seront utilisés dès que votre fiche sera référencée sur Google (inclus dans les formules Pro et Premium).{upgradeUrl && <> <a href={upgradeUrl}>Voir les formules</a></>}</p>
+    )}
+    {admin && (
+      <label class="field">
+        <span>Indexation par les moteurs de recherche</span>
+        <select name="index_mode">
+          {INDEX_MODES.map((m) => <option value={m.key} selected={((v as any).index_mode ?? 'auto') === m.key}>{m.label}</option>)}
+        </select>
+        <small>Actuellement : <strong>{indexable ? 'indexée' : 'non indexée'}</strong>. Une fiche non indexée reste visible dans l'annuaire mais porte la balise noindex et sort du sitemap.</small>
+      </label>
+    )}
+    <label class="field">
+      <span>Title <small data-seo-count="title">0/{SEO_TITLE_MAX}</small></span>
+      <input name="seo_title" maxlength="200" value={(v as any).seo_title ?? ''} placeholder={defaultTitle(seoBase)} data-seo="title" data-seo-field data-seo-max={SEO_TITLE_MAX} />
+      <small>Laissez vide pour le titre automatique (affiché en grisé). 50 à 60 caractères conseillés, une fois les variables remplacées.</small>
+    </label>
+    <label class="field">
+      <span>Meta description <small data-seo-count="desc">0/{SEO_DESC_MAX}</small></span>
+      <textarea name="seo_description" rows="3" maxlength="400" placeholder={defaultDescription(seoBase)} data-seo="desc" data-seo-field data-seo-max={SEO_DESC_MAX}>{(v as any).seo_description ?? ''}</textarea>
+      <small>Laissez vide pour la description automatique. 120 à 155 caractères conseillés.</small>
+    </label>
+    <SeoVarChips type="fiche" />
+    <div class="serp" aria-label="Aperçu dans Google" data-serp
+      data-tpl-title={template('fiche', 'title')} data-tpl-desc={template('fiche', 'description')}
+      data-site-vars={JSON.stringify(siteVars())} data-desc-max={DESC_MAX}>
+      <p class="serp-url">{ENV.siteUrl.replace(/^https?:\/\//, '')}{slugPreview}</p>
+      <p class="serp-title" data-serp-title>{(v as any).seo_title || defaultTitle(seoBase)}</p>
+      <p class="serp-desc" data-serp-desc>{(v as any).seo_description || defaultDescription(seoBase)}</p>
+    </div>
+  </fieldset>
+
+  <div class="submit-bar">
+    <button class="btn gradient-bg" type="submit">{submitLabel}</button>
+    <slot name="after-submit" />
+  </div>
+</form>
+
+<script>
+  import { fillTemplate } from '../lib/seoVars';
+  const form = document.querySelector<HTMLFormElement>('[data-fiche-form]');
+  if (form) {
+    form.querySelector<HTMLElement>('[data-errors]')?.focus();
+
+    // Filtre de catégories : masque les options qui ne correspondent pas.
+    const norm = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+    const filter = form.querySelector<HTMLInputElement>('[data-cat-filter]');
+    const select = form.querySelector<HTMLSelectElement>('[data-cat-select]')!;
+    filter?.addEventListener('input', () => {
+      const t = norm(filter.value.trim());
+      let firstMatch: HTMLOptionElement | null = null;
+      for (const g of select.querySelectorAll('optgroup')) {
+        let any = false;
+        for (const o of g.querySelectorAll('option')) {
+          const ok = !t || norm(o.text).includes(t) || norm(g.label).includes(t);
+          o.hidden = !ok;
+          if (ok) { any = true; firstMatch ??= o; }
+        }
+        (g as HTMLElement).hidden = !any;
+      }
+      if (t && firstMatch && (!select.value || select.selectedOptions[0]?.hidden)) select.value = firstMatch.value;
+    });
+
+    // Autocomplétion d'adresse (Base Adresse Nationale via la Géoplateforme).
+    const addrInput = form.querySelector<HTMLInputElement>('[data-addr-input]')!;
+    const addrList = form.querySelector<HTMLUListElement>('[data-addr-list]')!;
+    const set = (k: string, val: string) => { const el = form.querySelector<HTMLInputElement>(`[data-addr="${k}"]`); if (el) el.value = val; };
+    const mapBox = form.querySelector<HTMLElement>('[data-map]')!;
+    const geoState = form.querySelector<HTMLElement>('[data-geo-state]')!;
+    const showMap = (lat: number, lng: number) => {
+      mapBox.hidden = false;
+      mapBox.innerHTML = `<iframe title="Position" src="https://maps.google.com/maps?q=${lat},${lng}&z=16&output=embed" loading="lazy"></iframe>`;
+      geoState.textContent = `Position : ${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+    };
+    let t: number | undefined;
+    addrInput.addEventListener('input', () => {
+      clearTimeout(t);
+      const q = addrInput.value.trim();
+      if (q.length < 4) { addrList.hidden = true; return; }
+      t = window.setTimeout(async () => {
+        try {
+          const res = await fetch(`https://data.geopf.fr/geocodage/search?q=${encodeURIComponent(q)}&limit=6&autocomplete=1&lat=49.18&lon=-0.37`);
+          const data = await res.json();
+          addrList.replaceChildren(...data.features.map((f: any) => {
+            const li = document.createElement('li');
+            const b = document.createElement('button');
+            b.type = 'button';
+            b.textContent = f.properties.label;
+            b.addEventListener('click', () => {
+              const p = f.properties;
+              set('street', p.type === 'municipality' ? '' : p.name);
+              set('postcode', p.postcode ?? '');
+              set('city', p.city ?? '');
+              const [lng, lat] = f.geometry.coordinates;
+              set('lat', String(lat)); set('lng', String(lng));
+              showMap(lat, lng);
+              addrList.hidden = true;
+              addrInput.value = p.label;
+            });
+            li.append(b);
+            return li;
+          }));
+          addrList.hidden = !data.features.length;
+        } catch {}
+      }, 220);
+    });
+    // Modification manuelle de l'adresse : la position sera recalculée côté serveur.
+    for (const k of ['street', 'postcode', 'city']) {
+      form.querySelector(`[data-addr="${k}"]`)?.addEventListener('input', () => {
+        set('lat', ''); set('lng', '');
+        geoState.textContent = "Position recalculée à l'enregistrement.";
+      });
+    }
+
+    // Horaires
+    const grid = form.querySelector<HTMLElement>('[data-hours-grid]')!;
+    const always = form.querySelector<HTMLInputElement>('[data-h-always]')!;
+    const none = form.querySelector<HTMLInputElement>('[data-h-none]')!;
+    for (const r of form.querySelectorAll<HTMLInputElement>('input[name="h_mode"]')) {
+      r.addEventListener('change', () => {
+        grid.hidden = r.value !== 'set';
+        always.checked = r.value === 'always';
+        none.checked = r.value === 'none';
+      });
+    }
+    const syncDay = (row: HTMLElement) => {
+      const open = row.querySelector<HTMLInputElement>('[data-day-open]')!.checked;
+      row.classList.toggle('is-closed', !open);
+      if (open) {
+        const inputs = row.querySelectorAll<HTMLInputElement>('input[type="time"]');
+        if (!inputs[0].value && !inputs[1].value) { inputs[0].value = '09:00'; inputs[1].value = '18:00'; }
+      }
+    };
+    for (const row of grid.querySelectorAll<HTMLElement>('.hrow')) {
+      syncDay(row);
+      row.querySelector('[data-day-open]')!.addEventListener('change', () => syncDay(row));
+    }
+    form.querySelector('[data-copy-monday]')?.addEventListener('click', () => {
+      const src = [...grid.querySelectorAll<HTMLInputElement>('[data-day="mo"] input[type="time"]')].map((i) => i.value);
+      for (const row of grid.querySelectorAll<HTMLElement>('.hrow:not([data-day="mo"])')) {
+        if (!row.querySelector<HTMLInputElement>('[data-day-open]')!.checked) continue;
+        row.querySelectorAll<HTMLInputElement>('input[type="time"]').forEach((i, n) => (i.value = src[n]));
+      }
+    });
+
+    // Compteurs de caractères
+    for (const el of form.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('[data-count]')) {
+      const out = form.querySelector<HTMLElement>(`[data-count-for="${el.name}"]`);
+      const upd = () => { if (out) out.textContent = `${el.value.length}/${el.maxLength}`; };
+      el.addEventListener('input', upd);
+      upd();
+    }
+
+    // Aperçu du logo et de la bannière choisis (envoyés à l'enregistrement du formulaire).
+    for (const box of form.querySelectorAll<HTMLElement>('[data-media]')) {
+      const input = box.querySelector<HTMLInputElement>('[data-media-input]')!;
+      input.addEventListener('change', () => {
+        const file = input.files?.[0];
+        if (!file) return;
+        box.querySelector<HTMLImageElement>('[data-media-prev]')!.src = URL.createObjectURL(file);
+        box.querySelector<HTMLElement>('[data-media-box]')!.hidden = false;
+      });
+    }
+
+    // Aperçu Google en direct : variables (%%nom%%, %%ville%%…) remplacées avec les valeurs du formulaire.
+    const serp = form.querySelector<HTMLElement>('[data-serp]');
+    if (serp) {
+      const serpT = serp.querySelector<HTMLElement>('[data-serp-title]')!;
+      const serpD = serp.querySelector<HTMLElement>('[data-serp-desc]')!;
+      const field = (n: string) => form.querySelector<HTMLInputElement>(`[name="${n}"]`);
+      const cat = form.querySelector<HTMLSelectElement>('[name="category"]');
+      const vars = () => {
+        const opt = cat?.selectedOptions[0];
+        const c = opt?.value ? opt.text : '';
+        return {
+          ...JSON.parse(serp.dataset.siteVars ?? '{}'),
+          nom: field('name')?.value.trim() || 'Votre établissement', categorie: c, categorie_min: c.toLowerCase(),
+          univers: (opt?.parentElement as HTMLOptGroupElement | null)?.label ?? '', ville: field('city')?.value.trim() || form.dataset.defaultCity || '',
+          code_postal: field('postcode')?.value.trim() ?? '', description: field('short_desc')?.value.trim() ?? '',
+        };
+      };
+      const seoFields = [...form.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('[data-seo]')];
+      const render = () => {
+        const v = vars();
+        for (const el of seoFields) {
+          const isTitle = el.dataset.seo === 'title';
+          const tpl = isTitle ? serp.dataset.tplTitle! : serp.dataset.tplDesc!;
+          const auto = fillTemplate(tpl, v, isTitle ? 0 : Number(serp.dataset.descMax));
+          const own = el.value.trim() ? fillTemplate(el.value, v) : '';
+          el.placeholder = auto;
+          (isTitle ? serpT : serpD).textContent = own || auto;
+          const count = form.querySelector<HTMLElement>(`[data-seo-count="${el.dataset.seo}"]`);
+          const max = Number(el.dataset.seoMax);
+          if (count) { count.textContent = `${(own || '').length}/${max}`; count.classList.toggle('over', own.length > max); }
+        }
+      };
+      form.addEventListener('input', (e) => { if ((e.target as HTMLElement).matches('[data-seo], [name="name"], [name="city"], [name="postcode"], [name="short_desc"]')) render(); });
+      cat?.addEventListener('change', render);
+      render();
+    }
+
+    // Adresses envoyées sans « https:// » : le pare-feu de l'hébergeur bloque certains liens complets (WhatsApp, X,
+    // TikTok…) ; le serveur rajoute le préfixe à l'enregistrement.
+    form.addEventListener('submit', () => {
+      for (const el of form.querySelectorAll<HTMLInputElement>('input[name^="s_"], input[name="website"], input[name="news_link"]')) {
+        el.value = el.value.trim().replace(/^https?:\/\//i, '');
+      }
+    });
+
+    // Fiche existante : images enregistrées aussitôt (api/fiche-images). Galerie : ajout de plusieurs photos (envoyées
+    // une à une) ; corbeille sur chaque photo, le logo et la bannière, avec confirmation.
+    const ficheId = form.dataset.ficheId;
+    const dlg = form.querySelector<HTMLDialogElement>('[data-dlg]');
+    if (ficheId && dlg) {
+      const submit = form.querySelector<HTMLButtonElement>('button[type="submit"]');
+      let busy = 0;
+      const work = async (fn: () => Promise<void>) => {
+        busy++; if (submit) submit.disabled = true;
+        try { await fn(); } finally { busy--; if (submit) submit.disabled = busy > 0; }
+      };
+      const call = async (data: Record<string, string | Blob>) => {
+        const body = new FormData();
+        body.set('fiche', ficheId);
+        for (const [k, val] of Object.entries(data)) body.set(k, val);
+        const res = await fetch('/api/fiche-images', { method: 'POST', body, credentials: 'same-origin' }).catch(() => null);
+        const json = res ? await res.json().catch(() => null) : null;
+        if (!res?.ok) throw new Error(json?.error ?? "L'envoi a échoué : vérifiez votre connexion puis réessayez.");
+        return json as { photos?: string[]; refs?: { logo: string; name: string }[] };
+      };
+      // Fenêtre de confirmation : résout true sur « Supprimer ».
+      let answer: ((ok: boolean) => void) | null = null;
+      const ask = (src: string, title: string) => new Promise<boolean>((resolve) => {
+        dlg.querySelector<HTMLImageElement>('[data-dlg-img]')!.src = src;
+        dlg.querySelector<HTMLElement>('[data-dlg-title]')!.textContent = title;
+        answer = resolve;
+        dlg.showModal();
+      });
+      const reply = (ok: boolean) => { dlg.close(); answer?.(ok); answer = null; };
+      dlg.querySelector('[data-dlg-no]')!.addEventListener('click', () => reply(false));
+      dlg.querySelector('[data-dlg-yes]')!.addEventListener('click', () => reply(true));
+      dlg.addEventListener('click', (e) => { if (e.target === dlg) reply(false); });
+      dlg.addEventListener('cancel', () => { answer?.(false); answer = null; });
+
+      // Logo et bannière
+      for (const box of form.querySelectorAll<HTMLElement>('[data-media]')) {
+        const kind = box.dataset.media!;
+        const input = box.querySelector<HTMLInputElement>('[data-media-input]')!;
+        const prev = box.querySelector<HTMLImageElement>('[data-media-prev]')!;
+        const wrap = box.querySelector<HTMLElement>('[data-media-box]')!;
+        box.querySelector('[data-media-del]')?.addEventListener('click', async () => {
+          // Image choisie mais pas encore enregistrée : on annule simplement la sélection.
+          if (input.files?.length) {
+            input.value = '';
+            prev.src = box.dataset.saved ?? '';
+            wrap.hidden = !box.dataset.saved;
+            return;
+          }
+          if (!(await ask(prev.src, kind === 'logo' ? 'Supprimer le logo ?' : 'Supprimer la bannière ?'))) return;
+          await work(async () => {
+            wrap.classList.add('busy');
+            try {
+              await call({ action: `remove-${kind}` });
+              box.dataset.saved = '';
+              prev.removeAttribute('src');
+              wrap.hidden = true;
+            } catch (err) { alert((err as Error).message); }
+            wrap.classList.remove('busy');
+          });
+        });
+      }
+
+      // Références clients
+      const refs = form.querySelector<HTMLElement>('[data-refs]');
+      if (refs) {
+        const list = refs.querySelector<HTMLElement>('[data-refs-list]')!;
+        const tpl = refs.querySelector<HTMLTemplateElement>('[data-ref-tpl]')!;
+        const msg = refs.querySelector<HTMLElement>('[data-ref-msg]')!;
+        const nameIn = refs.querySelector<HTMLInputElement>('[data-ref-name]');
+        const input = refs.querySelector<HTMLInputElement>('[data-ref-input]');
+        const add = refs.querySelector<HTMLElement>('[data-ref-add]');
+        const max = Number(refs.dataset.max);
+        const say = (text: string) => { msg.textContent = text; msg.hidden = !text; };
+        const refresh = () => add?.classList.toggle('off', list.querySelectorAll('[data-ref]').length >= max);
+        refresh();
+        input?.addEventListener('change', () => {
+          const file = input.files?.[0];
+          input.value = '';
+          if (!file) return;
+          say('');
+          const name = nameIn?.value.trim() ?? '';
+          const fig = tpl.content.firstElementChild!.cloneNode(true) as HTMLElement;
+          const img = fig.querySelector('img')!;
+          img.src = URL.createObjectURL(file);
+          fig.querySelector('figcaption')!.textContent = name;
+          list.append(fig);
+          work(async () => {
+            try {
+              const { refs: all = [] } = await call({ action: 'add-ref', photo: file, name });
+              URL.revokeObjectURL(img.src);
+              img.src = fig.dataset.ref = all[all.length - 1].logo;
+              fig.classList.remove('busy');
+              if (nameIn) nameIn.value = '';
+            } catch (e) {
+              fig.remove();
+              say((e as Error).message);
+            }
+            refresh();
+          });
+        });
+        list.addEventListener('click', async (e) => {
+          const fig = (e.target as HTMLElement).closest('[data-ref-del]')?.closest<HTMLElement>('[data-ref]');
+          if (!fig || !(await ask(fig.dataset.ref!, 'Supprimer cette référence ?'))) return;
+          await work(async () => {
+            fig.classList.add('busy');
+            try {
+              await call({ action: 'remove-ref', path: fig.dataset.ref! });
+              fig.remove();
+              say('');
+            } catch (err) {
+              fig.classList.remove('busy');
+              say((err as Error).message);
+            }
+            refresh();
+          });
+        });
+      }
+
+      // Galerie
+      const gal = form.querySelector<HTMLElement>('[data-gallery]');
+      if (gal) {
+        const thumbs = gal.querySelector<HTMLElement>('[data-thumbs]')!;
+        const tpl = gal.querySelector<HTMLTemplateElement>('[data-thumb-tpl]')!;
+        const msg = gal.querySelector<HTMLElement>('[data-gal-msg]')!;
+        const input = gal.querySelector<HTMLInputElement>('[data-photos-input]');
+        const add = gal.querySelector<HTMLElement>('[data-add]');
+        const max = Number(gal.dataset.max);
+        const say = (text: string) => { msg.textContent = text; msg.hidden = !text; };
+        const count = () => thumbs.querySelectorAll('[data-photo]').length;
+        const refresh = () => add?.classList.toggle('off', count() >= max);
+        refresh();
+
+        input?.addEventListener('change', () => {
+          const files = [...(input.files ?? [])];
+          input.value = '';
+          say('');
+          const room = max - count();
+          if (files.length > room) say(`Votre formule permet ${max} photos : ${room > 0 ? `seules les ${room} premières sont ajoutées` : 'supprimez-en une pour en ajouter une autre'}.`);
+          const queue = files.slice(0, Math.max(room, 0)).map((file) => {
+            const fig = tpl.content.firstElementChild!.cloneNode(true) as HTMLElement;
+            fig.querySelector('img')!.src = URL.createObjectURL(file);
+            fig.classList.add('busy');
+            thumbs.append(fig);
+            return { file, fig };
+          });
+          work(async () => {
+            for (const { file, fig } of queue) {
+              const img = fig.querySelector('img')!;
+              try {
+                const { photos = [] } = await call({ action: 'add', photo: file });
+                URL.revokeObjectURL(img.src);
+                img.src = fig.dataset.photo = photos[photos.length - 1];
+                fig.classList.remove('busy');
+              } catch (e) {
+                fig.remove();
+                say((e as Error).message);
+              }
+              refresh();
+            }
+          });
+        });
+
+        thumbs.addEventListener('click', async (e) => {
+          const fig = (e.target as HTMLElement).closest('[data-del]')?.closest<HTMLElement>('[data-photo]');
+          if (!fig || !(await ask(fig.dataset.photo!, 'Supprimer cette photo ?'))) return;
+          await work(async () => {
+            fig.classList.add('busy');
+            try {
+              await call({ action: 'remove', path: fig.dataset.photo! });
+              fig.remove();
+              say('');
+            } catch (err) {
+              fig.classList.remove('busy');
+              say((err as Error).message);
+            }
+            refresh();
+          });
+        });
+      }
+    }
+
+    // Évite le double envoi
+    form.addEventListener('submit', () => {
+      const btn = form.querySelector<HTMLButtonElement>('button[type="submit"]');
+      if (btn) { btn.disabled = true; btn.textContent = 'Enregistrement…'; }
+    });
+  }
+</script>
+
+<style>
+  .price-in { display: inline-flex; align-items: center; gap: .4rem; }
+  .price-in input { max-width: 9rem; }
+  .fiche-form { display: grid; gap: 1rem; }
+  fieldset.panel { margin: 0; display: grid; gap: 1rem; min-width: 0; scroll-margin-top: calc(var(--header-h) + 60px); }
+  legend { float: left; width: 100%; padding: 0; margin-bottom: .25rem; font-weight: 800; font-size: 1.1rem; display: flex; align-items: center; gap: .5rem; }
+  legend + * { clear: both; }
+  .steps {
+    position: sticky; top: var(--header-h); z-index: 6; display: flex; gap: .3rem; overflow-x: auto; scrollbar-width: none;
+    padding: .55rem 0; background: color-mix(in srgb, var(--bg) 90%, transparent); backdrop-filter: blur(8px);
+  }
+  .steps a { flex: none; padding: .35rem .75rem; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); font-size: .84rem; font-weight: 600; }
+  .steps a:hover { border-color: var(--accent); }
+  .radios { display: flex; flex-wrap: wrap; gap: .5rem 1.25rem; }
+  .cat-filter { margin-bottom: .1rem; }
+  .addr-search { position: relative; }
+  .addr-list { position: absolute; left: 0; right: 0; top: 4.6rem; z-index: 10; list-style: none; margin: 0; padding: .3rem; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); box-shadow: 0 16px 32px -14px rgba(0,0,0,.35); }
+  .addr-list :global(button) { display: block; width: 100%; text-align: left; padding: .55rem .7rem; border: 0; border-radius: 9px; background: none; cursor: pointer; font: inherit; }
+  .addr-list :global(button:hover) { background: var(--surface-2); }
+  .mini-map { position: relative; height: 220px; border-radius: 12px; overflow: hidden; border: 1px solid var(--line); }
+  .mini-map[hidden] { display: none; }
+  .mini-map :global(iframe) { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+
+  .hours-grid { display: grid; gap: .35rem; }
+  .hours-grid[hidden] { display: none; }
+  .hrow { display: grid; grid-template-columns: 9rem 1fr; align-items: center; gap: .75rem; padding: .45rem .6rem; border-radius: 10px; background: var(--surface-2); }
+  @media (max-width: 560px) { .hrow { grid-template-columns: 1fr; } }
+  .day { font-weight: 600; }
+  .slots { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem 1rem; }
+  .slot { display: inline-flex; align-items: center; gap: .3rem; }
+  .slot input { padding: .4rem .5rem; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: inherit; font: inherit; font-size: .9rem; }
+  .closed-txt { display: none; color: var(--muted); font-size: .9rem; }
+  .hrow.is-closed .slot { display: none; }
+  .hrow.is-closed .closed-txt { display: inline; }
+  .hours-tools { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem 1rem; margin-top: .4rem; }
+
+  .feat-grid { display: grid; gap: .45rem 1rem; grid-template-columns: repeat(auto-fill, minmax(12rem, 1fr)); }
+  .logo-row { display: flex; flex-wrap: wrap; align-items: center; gap: 1rem; }
+  .logo-prev { width: 72px; height: 72px; border-radius: 50%; object-fit: cover; border: 1px solid var(--line); }
+  .soc-field span { display: inline-flex; align-items: center; gap: .4rem; }
+  .pro-box { border-color: color-mix(in srgb, var(--cert) 40%, var(--line)); }
+  .locked .field { opacity: .75; }
+  .news-box { display: grid; gap: .7rem; padding: 1rem; border: 1px dashed var(--line); border-radius: 12px; }
+  .news-box .label { margin: 0; }
+  .banner-prev { width: 100%; max-width: 640px; aspect-ratio: 16 / 5; object-fit: cover; border-radius: 12px; border: 1px solid var(--line); }
+  #s-premium input[type='url'] + input[type='url'] { margin-top: .4rem; }
+  .leads-opt { align-items: flex-start; gap: .6rem; line-height: 1.45; }
+  .leads-opt input { margin-top: .25rem; }
+  p.leads-opt { display: flex; margin: 0; color: var(--muted); font-size: .92rem; }
+  .lock-msg { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; margin: 0; padding: .75rem 1rem; border-radius: 12px; background: color-mix(in srgb, var(--cert) 10%, var(--surface)); font-size: .92rem; }
+  .lock-msg a { color: var(--accent); font-weight: 700; }
+  .thumbs { display: flex; flex-wrap: wrap; gap: .6rem; }
+  .over { color: #b45309; font-weight: 600; }
+  .gallery { display: grid; gap: .6rem; justify-items: start; }
+  .thumbs:empty { display: none; }
+  .thumb, .media-box { position: relative; margin: 0; width: 120px; }
+  .media-box { display: inline-block; width: auto; }
+  .media-box[hidden] { display: none; }
+  .media-box.busy img { opacity: .45; }
+  .banner-row { display: grid; gap: .6rem; justify-items: start; }
+  .banner-row .media-box { width: 100%; max-width: 640px; }
+  .banner-row .banner-prev { display: block; }
+  .logo-row .thumb-del { top: -.35rem; right: -.35rem; width: 28px; height: 28px; }
+  .thumb img { width: 120px; height: 90px; object-fit: cover; border-radius: 10px; }
+  .thumb.busy img { opacity: .45; }
+  .thumb-del {
+    position: absolute; top: .3rem; right: .3rem; display: grid; place-items: center; width: 30px; height: 30px; padding: 0;
+    border: 0; border-radius: 50%; background: rgba(255, 255, 255, .92); color: #dc2626; cursor: pointer; box-shadow: 0 1px 4px rgba(0, 0, 0, .25);
+  }
+  .thumb-del:hover, .thumb-del:focus-visible { background: #dc2626; color: #fff; }
+  .thumb.busy .thumb-del { display: none; }
+  .refs-edit { display: grid; gap: .6rem; }
+  .refs-list { display: flex; flex-wrap: wrap; gap: .6rem; }
+  .refs-list:empty { display: none; }
+  .ref-item { position: relative; margin: 0; width: 140px; display: grid; gap: .3rem; justify-items: center; padding: .6rem; border: 1px solid var(--line); border-radius: 12px; background: #fff; }
+  .ref-item img { width: 100%; height: 60px; object-fit: contain; }
+  .ref-item figcaption { font-size: .8rem; color: #444; text-align: center; overflow-wrap: anywhere; }
+  .ref-item figcaption:empty { display: none; }
+  .ref-item.busy img { opacity: .45; }
+  .ref-item.busy .thumb-del { display: none; }
+  .ref-add { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
+  .ref-add input[data-ref-name] { flex: 1 1 14rem; max-width: 22rem; }
+  .add-photos { cursor: pointer; }
+  .add-photos input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+  .add-photos:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .add-photos.off { opacity: .5; pointer-events: none; }
+  .gal-msg { margin: 0; font-size: .88rem; font-weight: 600; color: #b45309; }
+  .confirm { max-width: min(22rem, calc(100vw - 2rem)); padding: 1.2rem; border: 0; border-radius: 16px; background: var(--surface); color: var(--text); box-shadow: 0 12px 40px rgba(0, 0, 0, .25); }
+  .confirm::backdrop { background: rgba(0, 0, 0, .45); }
+  .confirm img { width: 100%; max-height: 10rem; object-fit: cover; border-radius: 10px; }
+  .confirm p { margin: .8rem 0 1rem; line-height: 1.45; }
+  .confirm-actions { display: flex; justify-content: flex-end; gap: .5rem; }
+  .seo-state { margin: 0; padding: .7rem 1rem; border-radius: 12px; background: color-mix(in srgb, var(--cert) 10%, var(--surface)); font-size: .92rem; }
+  .seo-state.ok { background: color-mix(in srgb, #16a34a 12%, var(--surface)); }
+  .seo-state a { color: var(--accent); font-weight: 700; }
+  .serp { padding: 1rem 1.1rem; border: 1px solid var(--line); border-radius: 12px; background: #fff; font-family: Arial, sans-serif; }
+  .serp p { margin: 0; }
+  .serp-url { color: #202124; font-size: .82rem; }
+  .serp-title { color: #1a0dab; font-size: 1.15rem; line-height: 1.35; margin-top: .2rem !important; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .serp-desc { color: #4d5156; font-size: .88rem; line-height: 1.5; margin-top: .2rem !important; }
+  .submit-bar {
+    position: sticky; bottom: 0; z-index: 6; display: flex; flex-wrap: wrap; align-items: center; gap: .75rem;
+    padding: .9rem 0; background: color-mix(in srgb, var(--bg) 92%, transparent); backdrop-filter: blur(8px); border-top: 1px solid var(--line);
+  }
+  .submit-bar .btn { padding: .8rem 1.6rem; font-size: 1rem; }
+</style>

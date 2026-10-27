@@ -1,0 +1,175 @@
+---
+import Admin from '../../layouts/Admin.astro';
+import Pagination from '../../components/Pagination.astro';
+import { SITE, PLANS, axonautEnabled, stripeEnabled, type PlanKey } from '../../config';
+import { all, get, run, audit } from '../../lib/db';
+import { syncToAxonaut, retryAll, amountHt } from '../../lib/billing';
+import { ping } from '../../lib/axonaut';
+import { flash } from '../../lib/flash';
+import { getPromos, savePromos, type Promo } from '../../lib/promos';
+
+const admin = Astro.locals.user!;
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const action = form.get('_action');
+  if (action === 'test') {
+    try { await ping(); flash(Astro.cookies, 'ok', 'Connexion à Axonaut réussie.'); }
+    catch (e) { flash(Astro.cookies, 'error', `Connexion à Axonaut impossible : ${(e as Error).message}`); }
+  }
+  if (action === 'retry-all') {
+    const r = await retryAll();
+    flash(Astro.cookies, r.ok === r.total ? 'ok' : 'error', `${r.ok} facture(s) créée(s) dans Axonaut sur ${r.total}.`);
+  }
+  if (action === 'retry') {
+    const r = await syncToAxonaut(Number(form.get('id')));
+    flash(Astro.cookies, r.ok ? 'ok' : 'error', r.ok ? 'Facture créée dans Axonaut.' : `Échec : ${r.error}`);
+  }
+  if (action === 'promo') {
+    const codes = form.getAll('promo_code').map(String), plans = form.getAll('promo_plan').map(String);
+    const percents = form.getAll('promo_percent').map(String), untils = form.getAll('promo_until').map(String), texts = form.getAll('promo_text').map(String);
+    const list: Promo[] = [];
+    let bad = false;
+    codes.forEach((raw, i) => {
+      const code = raw.trim().toUpperCase();
+      if (!code) return;
+      const percent = Number(percents[i] || 0), until = untils[i] ?? '', text = (texts[i] ?? '').trim().slice(0, 160);
+      if (!/^[A-Z0-9_-]{3,30}$/.test(code) || !(percent >= 0 && percent <= 100) || (until && !/^\d{4}-\d{2}-\d{2}$/.test(until)) || /[<>]/.test(text)) { bad = true; return; }
+      list.push({ code, plan: plans[i] === 'pro' || plans[i] === 'premium' ? plans[i] as Promo['plan'] : '', percent, until, text });
+    });
+    if (bad) flash(Astro.cookies, 'error', 'Offre invalide : code en lettres et chiffres (3 à 30), pourcentage de 0 à 100, texte sans < >.');
+    else { savePromos(list); flash(Astro.cookies, 'ok', list.length ? `${list.length} offre(s) enregistrée(s).` : 'Offres retirées du site.'); }
+  }
+  if (action === 'skip') {
+    run("UPDATE billing_invoices SET status = 'skipped', updated_at = datetime('now') WHERE id = ? AND status IN ('pending', 'error')", Number(form.get('id')));
+    flash(Astro.cookies, 'info', 'Paiement ignoré : aucune facture ne sera créée.');
+  }
+  audit(admin.id, `billing.${action}`, String(form.get('id') ?? ''));
+  return Astro.redirect('/admin/facturation' + Astro.url.search);
+}
+
+const promos = getPromos();
+const status = Astro.url.searchParams.get('statut') ?? '';
+const page = Math.max(1, Number(Astro.url.searchParams.get('page')) || 1);
+const per = 50;
+const where = ['pending', 'sent', 'error', 'skipped', 'refunded'].includes(status) ? 'WHERE b.status = ?' : '';
+const params = where ? [status] : [];
+const total = get<{ n: number }>(`SELECT COUNT(*) n FROM billing_invoices b ${where}`, ...params)!.n;
+const rows = all<any>(
+  `SELECT b.*, f.name AS fiche_name, u.email AS user_email FROM billing_invoices b
+   LEFT JOIN fiches f ON f.id = b.fiche_id LEFT JOIN users u ON u.id = b.user_id ${where}
+   ORDER BY b.paid_at DESC, b.id DESC LIMIT ? OFFSET ?`, ...params, per, (page - 1) * per);
+const counts = Object.fromEntries(all<{ status: string; n: number }>('SELECT status, COUNT(*) n FROM billing_invoices GROUP BY status').map((r) => [r.status, r.n]));
+const month = get<{ ttc: number }>("SELECT COALESCE(SUM(amount_ttc_cents), 0) ttc FROM billing_invoices WHERE status <> 'refunded' AND paid_at >= date('now', 'start of month')")!.ttc;
+const euros = (cents: number) => (cents / 100).toLocaleString('fr-FR', { style: 'currency', currency: 'EUR' });
+const LABEL: Record<string, [string, string]> = {
+  pending: ['badge-warn', 'En attente'], sent: ['badge-ok', 'Facturée'], error: ['badge-err', 'Erreur'], skipped: ['', 'Ignorée'], refunded: ['', 'Remboursée'],
+};
+---
+<Admin title="Facturation">
+  <form method="post" class="panel promo">
+    <input type="hidden" name="_action" value="promo" />
+    <div>
+      <h2>Offres promotionnelles</h2>
+      <p class="muted">Affichées sur les tarifs, la page d'abonnement, les cartes des formules et les emails, jusqu'à leur date de fin. Chaque code doit aussi être créé dans Stripe (<code>npm run stripe:promo</code>, voir le README) : le client le saisit sur la page de paiement. Code vide = offre retirée.</p>
+    </div>
+    {[...promos, { code: '', plan: '', percent: 0, until: '', text: '' }].map((p) => (
+      <div class="promo-f">
+        <label class="field"><span>Code</span><input name="promo_code" value={p.code} placeholder="PROMO20" maxlength="30" /></label>
+        <label class="field"><span>Formule</span>
+          <select name="promo_plan"><option value="">Toutes</option><option value="pro" selected={p.plan === 'pro'}>Pro</option><option value="premium" selected={p.plan === 'premium'}>Premium</option></select>
+        </label>
+        <label class="field pct"><span>Réduction %</span><input name="promo_percent" type="number" min="0" max="100" value={p.percent || ''} /></label>
+        <label class="field"><span>Jusqu'au</span><input name="promo_until" type="date" value={p.until} /></label>
+        <label class="field grow"><span>Texte <small>(facultatif, sinon généré)</small></span><input name="promo_text" value={p.text} maxlength="160" placeholder="Ex. -20 % sur Pro jusqu'au 30 novembre" /></label>
+      </div>
+    ))}
+    <div><button class="btn gradient-bg">Enregistrer les offres</button></div>
+  </form>
+  <section class="panel conf">
+    <div>
+      <h2>Liaison Stripe → Axonaut</h2>
+      <ul>
+        <li>Paiement : <strong>{stripeEnabled() ? 'Stripe connecté' : 'mode démo (aucune facture n’est émise)'}</strong></li>
+        <li>Axonaut : <strong>{axonautEnabled() ? 'clé API renseignée' : 'clé API absente : les paiements restent en attente'}</strong></li>
+        <li>TVA appliquée : <strong>{SITE.billing.vatRate} %</strong> (prix Stripe TTC, factures Axonaut en HT + TVA)</li>
+      </ul>
+    </div>
+    <div class="acts">
+      {axonautEnabled() && <form method="post"><button class="btn btn-ghost" name="_action" value="test">Tester la connexion</button></form>}
+      {axonautEnabled() && ((counts.pending ?? 0) + (counts.error ?? 0)) > 0 && (
+        <form method="post"><button class="btn gradient-bg" name="_action" value="retry-all">Envoyer les {(counts.pending ?? 0) + (counts.error ?? 0)} en attente</button></form>
+      )}
+    </div>
+  </section>
+
+  <div class="kpis">
+    <a class="panel kpi" href="/admin/facturation"><span class="v">{euros(month)}</span><span class="l">Encaissé ce mois (TTC)</span></a>
+    {Object.entries(LABEL).map(([k, [, l]]) => (
+      <a class:list={['panel', 'kpi', { alert: k === 'error' && counts[k] }]} href={`/admin/facturation?statut=${k}`}><span class="v">{counts[k] ?? 0}</span><span class="l">{l}</span></a>
+    ))}
+  </div>
+
+  <div class="table-wrap">
+    <table class="table">
+      <thead><tr><th>Payé le</th><th>Client</th><th>Formule</th><th>HT</th><th>TTC</th><th>État</th><th>Axonaut</th><th></th></tr></thead>
+      <tbody>
+        {rows.map((r) => (
+          <tr>
+            <td><small>{r.paid_at}</small></td>
+            <td>{r.fiche_id ? <a href={`/admin/fiches/${r.fiche_id}`}>{r.fiche_name}</a> : '—'}<br /><small class="muted">{r.user_email ?? r.stripe_customer}</small></td>
+            <td>{PLANS[(r.plan as PlanKey) || 'pro'].name} {r.interval === 'year' ? 'annuel' : 'mensuel'}</td>
+            <td>{euros(Math.round(amountHt(r.amount_ttc_cents, r.vat_rate) * 100))}</td>
+            <td>{euros(r.amount_ttc_cents)}</td>
+            <td><span class:list={['badge', LABEL[r.status]?.[0]]}>{LABEL[r.status]?.[1] ?? r.status}</span>{r.error && <><br /><small class="err">{r.error}</small></>}</td>
+            <td>{r.axonaut_url ? <a href={r.axonaut_url} target="_blank" rel="noopener">{r.axonaut_number || 'Voir'}</a> : <small class="muted">{r.stripe_invoice_id}</small>}</td>
+            <td>
+              {['pending', 'error'].includes(r.status) && (
+                <form method="post" class="row-acts">
+                  <input type="hidden" name="id" value={r.id} />
+                  {axonautEnabled() && <button class="btn btn-ghost btn-sm" name="_action" value="retry">Envoyer</button>}
+                  <button class="btn btn-ghost btn-sm" name="_action" value="skip" data-confirm="Ne pas créer de facture pour ce paiement ?">Ignorer</button>
+                </form>
+              )}
+            </td>
+          </tr>
+        ))}
+        {rows.length === 0 && <tr><td colspan="8" class="muted">Aucun paiement enregistré. Chaque paiement Stripe réussi apparaîtra ici.</td></tr>}
+      </tbody>
+    </table>
+  </div>
+  <Pagination page={page} total={total} perPage={per} url={Astro.url} />
+
+  <section class="panel help">
+    <h2>Fonctionnement</h2>
+    <ol>
+      <li>Chaque paiement Stripe réussi (souscription, renouvellement, changement de formule) est enregistré ici via le webhook <code>invoice.paid</code>.</li>
+      <li>L'annuaire crée alors dans Axonaut le client (s'il n'existe pas), la facture (HT + TVA, période facturée) et le règlement par carte.</li>
+      <li>Axonaut numérote la facture, l'envoie au client et la transmet en facture électronique (plateforme agréée).</li>
+      <li>Un remboursement Stripe passe la ligne en « Remboursée » et vous prévient par email : l'avoir est à émettre dans Axonaut.</li>
+    </ol>
+    <p class="muted">Dans Stripe, désactivez l'envoi des factures Stripe aux clients (Paramètres &gt; Emails clients) : la facture officielle est celle d'Axonaut.</p>
+  </section>
+</Admin>
+
+<style>
+  .conf { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 1rem; align-items: flex-start; margin-bottom: 1rem; }
+  .conf h2, .help h2 { margin: 0 0 .5rem; font-size: 1.05rem; }
+  .conf ul { margin: 0; padding-left: 1.1rem; font-size: .92rem; }
+  .acts { display: flex; flex-wrap: wrap; gap: .5rem; }
+  .kpis { display: grid; gap: .6rem; grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr)); margin-bottom: 1rem; }
+  .kpi { display: flex; flex-direction: column; padding: .9rem 1rem; }
+  .kpi .v { font-size: 1.4rem; font-weight: 800; }
+  .kpi .l { color: var(--muted); font-size: .82rem; font-weight: 600; }
+  .kpi.alert { border-color: color-mix(in srgb, #dc2626 50%, var(--line)); }
+  .kpi.alert .v { color: #b91c1c; }
+  .err { color: #b91c1c; }
+  .row-acts { display: flex; gap: .3rem; flex-wrap: wrap; }
+  .help { margin-top: 1.5rem; }
+  .help ol { margin: 0 0 .75rem; padding-left: 1.2rem; font-size: .92rem; display: grid; gap: .3rem; }
+  .promo { display: grid; gap: .8rem; margin-bottom: 1.2rem; }
+  .promo h2 { margin: 0 0 .3rem; font-size: 1.05rem; }
+  .promo p { margin: 0; }
+  .promo-f { display: flex; flex-wrap: wrap; gap: .8rem; align-items: flex-end; }
+  .promo-f .grow { flex: 1; min-width: 16rem; }
+  .promo-f .pct input { width: 6rem; }
+</style>

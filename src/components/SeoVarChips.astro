@@ -1,0 +1,48 @@
+---
+// Boutons d'insertion des variables SEO (%%nom%%…) dans le dernier champ title/description utilisé
+// du même bloc [data-seo-scope] (champs marqués data-seo-field).
+import { GLOBAL_VARS, TYPE_VARS } from '../lib/seoVars';
+
+interface Props { type?: string; global?: boolean }
+const { type, global = true } = Astro.props;
+const vars = [...(type ? TYPE_VARS[type] ?? [] : []), ...(global ? GLOBAL_VARS : [])];
+---
+<div class="chips" role="group" aria-label="Insérer une variable">
+  <span class="chips-l">Variables :</span>
+  {vars.map((v) => <button type="button" class="chip-var" data-insert={`%%${v.key}%%`} title={v.label}>{v.label}</button>)}
+</div>
+
+<script>
+  // Mémorise le dernier champ SEO utilisé dans chaque bloc, puis insère la variable à la position du curseur.
+  const last = new WeakMap<Element, HTMLInputElement | HTMLTextAreaElement>();
+  document.addEventListener('focusin', (e) => {
+    const el = e.target as HTMLElement;
+    if (el.matches?.('[data-seo-field]')) last.set(el.closest('[data-seo-scope]') ?? document.body, el as HTMLInputElement);
+  });
+  document.addEventListener('click', (e) => {
+    const b = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-insert]');
+    if (!b) return;
+    const scope = b.closest('[data-seo-scope]') ?? document.body;
+    const el = last.get(scope) ?? scope.querySelector<HTMLInputElement>('[data-seo-field]');
+    if (!el || el.disabled) return;
+    const token = b.dataset.insert!;
+    const start = el.selectionStart ?? el.value.length, end = el.selectionEnd ?? el.value.length;
+    const before = el.value.slice(0, start), after = el.value.slice(end);
+    // Espace avant si collé à du texte, et toujours un espace après (pour continuer à écrire).
+    const ins = `${before && !/\s$/.test(before) ? ' ' : ''}${token}${/^\s/.test(after) ? '' : ' '}`;
+    el.value = before + ins + after;
+    el.focus();
+    el.setSelectionRange(start + ins.length, start + ins.length);
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+</script>
+
+<style>
+  .chips { display: flex; flex-wrap: wrap; gap: .3rem; align-items: center; }
+  .chips-l { font-size: .8rem; color: var(--muted); margin-right: .2rem; }
+  .chip-var {
+    padding: .2rem .55rem; border: 1px solid var(--line); border-radius: 999px; background: var(--surface-2);
+    font: inherit; font-size: .78rem; cursor: pointer; color: var(--text);
+  }
+  .chip-var:hover { border-color: var(--accent); color: var(--accent); }
+</style>

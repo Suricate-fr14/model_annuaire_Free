@@ -1,0 +1,39 @@
+---
+import Base from '../../layouts/Base.astro';
+import Breadcrumb from '../../components/Breadcrumb.astro';
+import FicheRow from '../../components/FicheRow.astro';
+import Pagination from '../../components/Pagination.astro';
+import { SITE } from '../../config';
+import { listFiches } from '../../lib/fiches';
+
+const raw = (Astro.params.lettre ?? '').toLowerCase();
+const letter = raw === 'autres' ? '#' : /^[a-z]$/.test(raw) ? raw.toUpperCase() : null;
+if (!letter) return new Response(null, { status: 404 });
+
+const page = Math.max(1, Number(Astro.url.searchParams.get('page')) || 1);
+const { items, total } = listFiches({ letter, limit: SITE.perPage, offset: (page - 1) * SITE.perPage });
+if (page > 1 && !items.length) return Astro.redirect(Astro.url.pathname);
+const label = letter === '#' ? 'Autres (chiffres, symboles)' : `Lettre ${letter}`;
+const LETTERS = [...'abcdefghijklmnopqrstuvwxyz', 'autres'];
+---
+<Base title={`Entreprises commençant par ${letter === '#' ? 'un chiffre' : letter}${page > 1 ? ` (page ${page})` : ''} | ${SITE.fullName}`} noindex>
+  <div class="wrap">
+    <header class="page-head">
+      <Breadcrumb items={[{ name: 'Annuaire', href: '/annuaire' }, { name: label }]} />
+      <h1>{label}</h1>
+      <p>{total.toLocaleString('fr-FR')} fiches, les fiches certifiées en premier.</p>
+    </header>
+    <nav class="letters" aria-label="Lettres">
+      {LETTERS.map((l) => <a href={`/annuaire/${l}`} aria-current={l === raw ? 'page' : undefined}>{l === 'autres' ? '#' : l.toUpperCase()}</a>)}
+    </nav>
+    <ul class="list panel">{items.map((f) => <FicheRow fiche={f} />)}</ul>
+    <Pagination page={page} total={total} perPage={SITE.perPage} url={Astro.url} />
+  </div>
+</Base>
+
+<style>
+  .letters { position: sticky; top: var(--header-h); z-index: 5; display: flex; gap: .3rem; overflow-x: auto; padding: .6rem 0; background: color-mix(in srgb, var(--bg) 90%, transparent); backdrop-filter: blur(8px); scrollbar-width: none; }
+  .letters a { flex: none; display: grid; place-items: center; min-width: 2.1rem; height: 2.1rem; border-radius: 9px; font-weight: 700; font-size: .88rem; background: var(--surface); border: 1px solid var(--line); }
+  .letters a[aria-current], .letters a:hover { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .list { list-style: none; margin: .75rem 0 0; padding: .5rem; }
+</style>

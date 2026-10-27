@@ -1,0 +1,62 @@
+---
+// Simule le parcours Stripe tant qu'aucune clé n'est configurée (STRIPE_SECRET_KEY / STRIPE_PRICE_*).
+import Base from '../../layouts/Base.astro';
+import { PLANS, stripeEnabled, isPlanKey, planLabel, monthsOffered, type Interval } from '../../config';
+import { getFiche } from '../../lib/fiches';
+import { demoActivate, demoCancel, demoEndNow } from '../../lib/stripe';
+import { flash } from '../../lib/flash';
+import { audit } from '../../lib/db';
+
+const user = Astro.locals.user;
+if (stripeEnabled()) return Astro.redirect('/compte');
+if (!user) return Astro.redirect(`/connexion?next=${encodeURIComponent(Astro.url.pathname + Astro.url.search)}`);
+const f = getFiche(Number(Astro.url.searchParams.get('fiche')));
+if (!f || (f.owner_id !== user.id && user.role !== 'admin')) return new Response('Fiche introuvable', { status: 404 });
+const manage = Astro.url.searchParams.get('gerer') === '1';
+const qp = Astro.url.searchParams.get('formule');
+const plan = PLANS[isPlanKey(qp) ? qp : 'pro'];
+const interval: Interval = Astro.url.searchParams.get('periode') === 'month' ? 'month' : 'year';
+
+if (Astro.request.method === 'POST') {
+  const a = (await Astro.request.formData()).get('_action');
+  if (a === 'pay' && f.status === 'published') { await demoActivate(f.id, plan.key, interval); flash(Astro.cookies, 'ok', `Formule ${plan.name} activée (démo).`); }
+  if (a === 'cancel') { await demoCancel(f.id); flash(Astro.cookies, 'info', "Abonnement résilié : il reste actif jusqu'à la fin de la période (démo)."); }
+  if (a === 'end') { await demoEndNow(f.id); flash(Astro.cookies, 'info', 'Abonnement terminé immédiatement (démo).'); }
+  audit(user.id, `demo.${a}`, `${f.id} ${plan.key}/${interval}`);
+  return Astro.redirect(`/compte/fiches/${f.id}/abonnement`);
+}
+---
+<Base title="Paiement (démonstration)" noindex>
+  <div class="wrap narrow">
+    <div class="panel checkout">
+      <p class="tag">Mode démonstration · aucun paiement réel</p>
+      <h1>{manage ? 'Gérer mon abonnement' : `Formule ${plan.name}`}</h1>
+      <p class="muted">Fiche : <strong>{f.name}</strong></p>
+      {manage ? (
+        <form method="post" class="acts">
+          <button class="btn btn-ghost" name="_action" value="cancel" type="submit">Résilier à la fin de la période</button>
+          <button class="btn btn-danger" name="_action" value="end" type="submit">Mettre fin immédiatement</button>
+        </form>
+      ) : (
+        <form method="post" class="acts">
+          <p class="price">{planLabel(plan, interval)}</p>
+          <p class="muted small">{interval === 'year' ? `Facturé une fois par an${monthsOffered(plan) > 0 ? `, ${monthsOffered(plan)} mois offert${monthsOffered(plan) > 1 ? 's' : ''}` : ''}.` : 'Facturé chaque mois, sans engagement.'}</p>
+          <button class="btn gradient-bg" name="_action" value="pay" type="submit">Simuler le paiement</button>
+        </form>
+      )}
+      <p class="muted small">En production, cette étape est remplacée par la page de paiement sécurisée Stripe (clés à renseigner dans .env).</p>
+      <a href={`/compte/fiches/${f.id}/abonnement`}>← Annuler</a>
+    </div>
+  </div>
+</Base>
+
+<style>
+  .narrow { max-width: 34rem; padding-top: 3rem; }
+  .tag { display: inline-block; margin: 0 0 1rem; padding: .25rem .7rem; border-radius: 999px; background: color-mix(in srgb, #f59e0b 22%, var(--surface)); font-weight: 700; font-size: .8rem; }
+  h1 { margin: 0 0 .4rem; font-size: 1.5rem; }
+  .acts { display: flex; flex-wrap: wrap; align-items: center; gap: .75rem; margin: 1.5rem 0; }
+  .price { margin: 0; font-size: 1.4rem; font-weight: 800; width: 100%; }
+  .acts .small { width: 100%; margin: -0.5rem 0 0; }
+  .small { font-size: .82rem; }
+  a { color: var(--accent); font-weight: 600; }
+</style>

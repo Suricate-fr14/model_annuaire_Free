@@ -1,0 +1,96 @@
+---
+// Contenu éditorial des pages catégories, univers et villes (contenu : lib/pageContent) :
+// repères chiffrés, listes utiles, guide, FAQ, communes voisines. Texte sur une seule colonne, pleine largeur.
+import type { PageContent } from '../lib/pageContent';
+
+interface Props { content: PageContent; title: string; linksTitle?: string }
+const { content, title, linksTitle } = Astro.props;
+const facts = content.facts ?? [];
+const blocks = content.blocks ?? [];
+const guide = content.guide ?? [];
+---
+{(facts.length > 1 || blocks.length > 0) && (
+  <section class="seo panel" aria-labelledby="t-facts">
+    <h2 id="t-facts">{content.factsTitle}</h2>
+    {facts.length > 1 && (
+      <dl class="facts">
+        {facts.map((f) => <div><dt>{f.label}</dt><dd>{f.value}</dd></div>)}
+      </dl>
+    )}
+    {blocks.map((b) => (
+      <div class="block">
+        <h3>{b.h}</h3>
+        {b.p && <p>{b.p}</p>}
+        {b.items && b.items.length > 0 && (
+          <ul class="chips">
+            {b.items.map((i) => <li><a href={i.href}>{i.label}{i.note && <span>{i.note}</span>}</a></li>)}
+          </ul>
+        )}
+      </div>
+    ))}
+  </section>
+)}
+
+{guide.length > 0 && (
+  <section class="seo panel" aria-labelledby="t-guide">
+    <h2 id="t-guide">{content.guideTitle}</h2>
+    {guide.map(([h, p, link]) => (
+      <div class="block">
+        <h3>{h}</h3>
+        <p>{p}</p>
+        {link && <p class="more-row"><a class="more" href={link.href}>{link.label} →</a></p>}
+      </div>
+    ))}
+  </section>
+)}
+
+{(content.faq.length > 0 || content.links?.length) && (
+  <section class="seo panel" aria-labelledby="t-faq">
+    {content.faq.length > 0 && (
+      <>
+        <h2 id="t-faq">{title}</h2>
+        {content.faq.map((f, i) => (
+          <details open={i < 3}>
+            <summary>{f.q}</summary>
+            <p>{f.a}{f.link && <> <a href={f.link.href}>{f.link.label} →</a></>}</p>
+          </details>
+        ))}
+      </>
+    )}
+    {content.links && content.links.length > 0 && (
+      <nav class="near" aria-label={linksTitle}>
+        <h3>{linksTitle}</h3>
+        {content.links.map((l) => <a href={l.href}>{l.label}</a>)}
+      </nav>
+    )}
+    <p class="cta"><a href="/creer-ma-fiche">Créer ou revendiquer ma fiche</a> · <a href="/tarifs">Voir les formules Pro et Premium</a></p>
+  </section>
+)}
+
+<style>
+  .seo { margin-top: 2rem; }
+  h2 { margin: 0 0 1rem; font-size: 1.2rem; }
+  h3 { margin: 0 0 .35rem; font-size: 1rem; }
+  .block { border-top: 1px solid var(--line); padding: 1rem 0 .2rem; }
+  .block p { margin: 0 0 .6rem; color: var(--muted); line-height: 1.65; }
+  .facts { display: grid; grid-template-columns: repeat(auto-fill, minmax(10.5rem, 1fr)); gap: .6rem; margin: 0 0 1.2rem; }
+  .facts div { padding: .8rem .9rem; border-radius: 14px; border: 1px solid var(--line); background: var(--bg); }
+  .facts dt { font-size: .8rem; color: var(--muted); line-height: 1.35; }
+  .facts dd { margin: 0 0 .2rem; font-size: 1.35rem; font-weight: 750; order: -1; }
+  .facts div { display: flex; flex-direction: column; }
+  .chips { list-style: none; display: flex; flex-wrap: wrap; gap: .4rem; margin: .2rem 0 .8rem; padding: 0; }
+  .chips a { display: inline-flex; gap: .4rem; align-items: baseline; padding: .32rem .75rem; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); font-size: .86rem; font-weight: 500; }
+  .chips a:hover { border-color: var(--accent); }
+  .chips span { color: var(--muted); font-size: .76rem; font-weight: 400; }
+  details { border-top: 1px solid var(--line); padding: .8rem 0; }
+  summary { cursor: pointer; font-weight: 650; }
+  details p { margin: .5rem 0 0; color: var(--muted); line-height: 1.65; }
+  .block .more-row { margin: -.2rem 0 .6rem; text-align: right; }
+  .more { display: inline-block; padding: .35rem .85rem; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); font-size: .86rem; }
+  .more:hover { border-color: var(--accent); }
+  .more, details a, .cta a { color: var(--accent); font-weight: 600; }
+  .near { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; margin-top: .8rem; padding-top: .8rem; border-top: 1px solid var(--line); }
+  .near h3 { width: 100%; margin: 0 0 .2rem; font-size: .95rem; }
+  .near a { padding: .3rem .75rem; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); font-size: .86rem; }
+  .cta { margin: .8rem 0 0; font-size: .9rem; }
+</style>

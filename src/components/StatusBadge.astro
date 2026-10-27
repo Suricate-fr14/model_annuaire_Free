@@ -1,0 +1,14 @@
+---
+import type { Fiche } from '../lib/fiches';
+interface Props { fiche: Pick<Fiche, 'status' | 'certified' | 'premium' | 'pro_status'> }
+const { fiche: f } = Astro.props;
+const map = {
+  published: ['badge-ok', 'Publiée'],
+  pending: ['badge-warn', 'En attente de validation'],
+  rejected: ['badge-err', 'Refusée'],
+  unpublished: ['', 'Dépubliée'],
+} as const;
+const [cls, label] = map[f.status];
+---
+<span class:list={['badge', cls]}>{label}</span>
+{f.certified ? <span class="badge badge-pro">{f.premium ? 'Premium' : 'Pro'}{f.pro_status === 'canceled' ? ' (résilié)' : f.pro_status === 'past_due' ? ' (paiement en attente)' : ''}</span> : <span class="badge">Gratuite</span>}

@@ -1,0 +1,170 @@
+---
+// Back-office : interface dédiée (barre latérale, barre supérieure), distincte du site public.
+import '../styles/global.css';
+import Icon from '../components/Icon.astro';
+import { SITE } from '../config';
+import { get } from '../lib/db';
+
+interface Props { title: string; subtitle?: string; wide?: boolean }
+const { title, subtitle, wide = false } = Astro.props;
+const path = Astro.url.pathname;
+const { user, flash } = Astro.locals;
+const n = (sql: string) => get<{ n: number }>(sql)?.n ?? 0;
+const groups = [
+  { label: 'Pilotage', items: [
+    { href: '/admin', label: 'Tableau de bord', icon: 'dashboard' },
+  ] },
+  { label: 'Contenu', items: [
+    { href: '/admin/fiches', label: 'Fiches', icon: 'list', count: n("SELECT COUNT(*) n FROM fiches WHERE status = 'pending'") },
+    { href: '/admin/revendications', label: 'Revendications', icon: 'key', count: n("SELECT COUNT(*) n FROM claims WHERE status = 'pending'") },
+    { href: '/admin/signalements', label: 'Signalements', icon: 'flag', count: n("SELECT COUNT(*) n FROM reports WHERE status = 'open'") },
+    { href: '/admin/demandes', label: 'Demandes', icon: 'mail', count: n("SELECT COUNT(*) n FROM leads WHERE status = 'pending'") },
+  ] },
+  { label: 'Visibilité', items: [
+    { href: '/admin/seo', label: 'SEO', icon: 'search' },
+    { href: '/admin/mises-en-avant', label: 'Mises en avant', icon: 'star' },
+  ] },
+  { label: 'Clients', items: [
+    { href: '/admin/facturation', label: 'Facturation', icon: 'card', count: n("SELECT COUNT(*) n FROM billing_invoices WHERE status = 'error'") },
+    { href: '/admin/utilisateurs', label: 'Utilisateurs', icon: 'users' },
+    { href: '/admin/emails', label: 'Emails', icon: 'mail' },
+  ] },
+];
+const active = (h: string) => (h === '/admin' ? path === '/admin' : path.startsWith(h));
+---
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex, follow" />
+    <title>{title} · Admin | {SITE.fullName}</title>
+    <link rel="icon" href="/favicon-32.png" sizes="32x32" type="image/png" />
+  </head>
+  <body class="adm">
+    <aside class="sb" id="sb">
+      <a class="sb-brand" href="/admin">
+        <img src={SITE.parent.logo} alt={SITE.parent.name} width="66" height="28" />
+        <span>Admin</span>
+      </a>
+      <nav aria-label="Administration">
+        {groups.map((g) => (
+          <div class="sb-group">
+            <p class="sb-h">{g.label}</p>
+            {g.items.map((i) => (
+              <a href={i.href} class="sb-link" aria-current={active(i.href) ? 'page' : undefined}>
+                <Icon name={i.icon} size={18} />
+                <span>{i.label}</span>
+                {'count' in i && i.count ? <span class="sb-cnt">{i.count}</span> : null}
+              </a>
+            ))}
+          </div>
+        ))}
+      </nav>
+      <div class="sb-foot">
+        <a href="/" class="sb-link" target="_blank"><Icon name="external" size={18} /><span>Voir le site</span></a>
+        <form method="post" action="/deconnexion"><button class="sb-link" type="submit"><Icon name="logout" size={18} /><span>Déconnexion</span></button></form>
+      </div>
+    </aside>
+
+    <div class="main">
+      <header class="top">
+        <button type="button" class="burger" aria-label="Menu" data-burger><Icon name="list" size={20} /></button>
+        <div class="top-title">
+          <h1>{title}</h1>
+          {subtitle && <p>{subtitle}</p>}
+        </div>
+        <form class="top-search" action="/admin/fiches" method="get" role="search">
+          <Icon name="search" size={16} />
+          <input name="q" type="search" placeholder="Rechercher une fiche, un email…" aria-label="Rechercher une fiche" />
+        </form>
+        <span class="top-user" title={user?.email}>{(user?.name || user?.email || '?').slice(0, 1).toUpperCase()}</span>
+      </header>
+
+      {flash && <div class:list={['toast', `toast-${flash.type}`]} role="status">{flash.message}</div>}
+
+      <main class:list={['content', { wide }]}>
+        <slot />
+      </main>
+    </div>
+
+    <script>
+      document.addEventListener('click', (e) => {
+        const el = (e.target as HTMLElement).closest<HTMLElement>('[data-confirm]');
+        if (el && !confirm(el.dataset.confirm)) e.preventDefault();
+      });
+      document.querySelector('[data-burger]')?.addEventListener('click', () => document.getElementById('sb')?.classList.toggle('open'));
+    </script>
+  </body>
+</html>
+
+<style is:global>
+  body.adm { --sb-w: 15.5rem; --adm-bg: #f4f5f9; --sb-bg: #15143a; --bg: #f4f5f9; --header-h: 4.3rem; background: var(--adm-bg); background-image: none; display: block; min-height: 100vh; }
+  .adm .sb {
+    position: fixed; inset: 0 auto 0 0; width: var(--sb-w); z-index: 40; display: flex; flex-direction: column;
+    background: var(--sb-bg); color: #c9c8e6; padding: 1rem .75rem;
+  }
+  .adm .sb-brand { display: flex; align-items: center; gap: .6rem; padding: .4rem .6rem 1.1rem; border-bottom: 1px solid rgba(255,255,255,.08); }
+  .adm .sb-brand img { height: 28px; width: auto; filter: brightness(0) invert(1); }
+  .adm .sb-brand span { font-weight: 800; color: #fff; font-size: 1.05rem; padding: .1rem .5rem; border-radius: 6px; background: rgba(255,255,255,.12); }
+  .adm .sb nav { flex: 1; overflow-y: auto; padding-top: .75rem; }
+  .adm .sb-group { margin-bottom: 1rem; }
+  .adm .sb-h { margin: 0 .7rem .35rem; font-size: .68rem; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; color: #8584b0; }
+  .adm .sb-link {
+    display: flex; align-items: center; gap: .7rem; width: 100%; padding: .55rem .7rem; border-radius: 9px; border: 0; background: none;
+    color: inherit; font: inherit; font-size: .92rem; font-weight: 550; cursor: pointer; text-align: left;
+  }
+  .adm .sb-link:hover { background: rgba(255,255,255,.07); color: #fff; }
+  .adm .sb-link[aria-current] { background: #fff; color: var(--sb-bg); }
+  .adm .sb-cnt { margin-left: auto; min-width: 1.35rem; padding: 0 .4rem; border-radius: 999px; background: #ef4444; color: #fff; font-size: .7rem; font-weight: 800; line-height: 1.35rem; text-align: center; }
+  .adm .sb-foot { border-top: 1px solid rgba(255,255,255,.08); padding-top: .6rem; display: grid; gap: .1rem; }
+
+  .adm .main { margin-left: var(--sb-w); min-height: 100vh; }
+  .adm .top {
+    position: sticky; top: 0; z-index: 30; display: flex; align-items: center; gap: 1rem; padding: .85rem 1.75rem;
+    background: rgba(255,255,255,.92); backdrop-filter: blur(10px); border-bottom: 1px solid #e6e7ef;
+  }
+  .adm .top-title { min-width: 0; flex: 1; }
+  .adm .top-title h1 { margin: 0; font-size: 1.3rem; letter-spacing: -0.02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .adm .top-title p { margin: .1rem 0 0; color: var(--muted); font-size: .85rem; }
+  .adm .top-search { display: flex; align-items: center; gap: .5rem; width: min(22rem, 40vw); padding: .5rem .8rem; border: 1px solid #e1e2ec; border-radius: 10px; background: #f7f7fb; color: var(--muted); }
+  .adm .top-search input { border: 0; background: none; outline: 0; font: inherit; font-size: .9rem; width: 100%; color: var(--text); }
+  .adm .top-user { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 50%; background: var(--accent); color: #fff; font-weight: 800; flex: none; }
+  .adm .burger { display: none; border: 0; background: none; cursor: pointer; color: var(--text); }
+  @media (max-width: 960px) {
+    .adm .sb { transform: translateX(-100%); transition: transform .2s; }
+    .adm .sb.open { transform: none; box-shadow: 0 0 0 100vmax rgba(0,0,0,.35); }
+    .adm .main { margin-left: 0; }
+    .adm .burger { display: block; }
+    .adm .top-search { display: none; }
+  }
+  .adm .content { padding: 1.5rem 2rem 3rem; max-width: none; }
+  .adm .content.wide { max-width: none; }
+  .adm .toast { margin: 1rem 1.75rem 0; padding: .75rem 1rem; border-radius: 10px; font-weight: 600; font-size: .92rem; border: 1px solid transparent; }
+  .adm .toast-ok { background: #ecfdf3; border-color: #a6f4c5; color: #05603a; }
+  .adm .toast-error { background: #fef3f2; border-color: #fecdca; color: #912018; }
+  .adm .toast-info { background: #eff4ff; border-color: #c7d7fe; color: #1d2b8f; }
+
+  /* Composants communs du back-office */
+  .adm .panel { background: #fff; border: 1px solid #e6e7ef; border-radius: 14px; box-shadow: 0 1px 2px rgba(16,24,40,.04); }
+  .adm .card-h { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin: 0 0 1rem; }
+  .adm .card-h h2 { margin: 0; font-size: 1rem; }
+  .adm .card-h a { color: var(--accent); font-weight: 600; font-size: .86rem; }
+  .adm .table-wrap { background: #fff; border: 1px solid #e6e7ef; border-radius: 14px; overflow-x: auto; }
+  .adm .table { font-size: .9rem; }
+  .adm .table th { background: #f9fafb; color: #667085; font-size: .72rem; }
+  .adm .table td { vertical-align: middle; }
+  .adm .table tbody tr:hover { background: #fafaff; }
+  .adm .toolbar { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin-bottom: 1rem; }
+  .adm .toolbar .input { width: auto; flex: 1 1 14rem; background: #fff; }
+  .adm .toolbar select, .adm select.sel { padding: .55rem .8rem; border: 1px solid #e1e2ec; border-radius: 10px; background: #fff; color: inherit; font: inherit; font-size: .9rem; }
+  .adm .btn { border-radius: 10px; }
+  .adm .muted { color: #667085; }
+  .adm .chip { display: inline-flex; align-items: center; gap: .3rem; padding: .15rem .55rem; border-radius: 999px; font-size: .74rem; font-weight: 700; background: #f2f4f7; color: #344054; white-space: nowrap; }
+  .adm .chip-ok { background: #ecfdf3; color: #067647; }
+  .adm .chip-off { background: #f2f4f7; color: #667085; }
+  .adm .chip-pro { background: #eff4ff; color: #1d4ed8; }
+  .adm .chip-prem { background: #f4f3ff; color: #5925dc; }
+  .adm .chip-warn { background: #fffaeb; color: #b54708; }
+  .adm .chip-err { background: #fef3f2; color: #b42318; }
+</style>

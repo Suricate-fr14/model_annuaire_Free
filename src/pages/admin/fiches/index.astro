@@ -1,0 +1,209 @@
+---
+import Admin from '../../../layouts/Admin.astro';
+import Pagination from '../../../components/Pagination.astro';
+import Avatar from '../../../components/Avatar.astro';
+import Icon from '../../../components/Icon.astro';
+import { all, get, run, audit } from '../../../lib/db';
+import { parseFiche, CERTIFIED_SQL, isIndexable, setStatus, setIndexMode, invalidateStats } from '../../../lib/fiches';
+import { categoryName } from '../../../lib/taxonomy';
+import { normalize } from '../../../lib/text';
+import { flash } from '../../../lib/flash';
+
+const admin = Astro.locals.user!;
+
+// Actions groupées sur la sélection
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const ids = form.getAll('ids').map(Number).filter((n) => n > 0).slice(0, 500);
+  const action = String(form.get('bulk') ?? '');
+  if (ids.length) {
+    for (const id of ids) {
+      if (action === 'publish') setStatus(id, 'published');
+      if (action === 'unpublish') setStatus(id, 'unpublished');
+      if (['index', 'noindex', 'auto'].includes(action)) setIndexMode(id, action);
+    }
+    invalidateStats();
+    audit(admin.id, `admin.bulk.${action}`, ids.join(','));
+    const labels: Record<string, string> = { publish: 'publiées', unpublish: 'dépubliées', index: 'indexées', noindex: 'passées en noindex', auto: 'remises en indexation automatique' };
+    flash(Astro.cookies, 'ok', `${ids.length} fiche(s) ${labels[action] ?? 'modifiées'}.`);
+  } else flash(Astro.cookies, 'error', 'Aucune fiche sélectionnée.');
+  return Astro.redirect('/admin/fiches' + Astro.url.search);
+}
+
+const p = Astro.url.searchParams;
+const q = p.get('q') ?? '';
+const statut = p.get('statut') ?? '';
+const plan = p.get('plan') ?? '';
+const source = p.get('source') ?? '';
+const proprio = p.get('proprio') ?? '';
+const index = p.get('index') ?? '';
+const page = Math.max(1, Number(p.get('page')) || 1);
+const per = 50;
+
+const CERT = CERTIFIED_SQL.replaceAll('pro_', 'f.pro_');
+const IDX = `(f.status = 'published' AND (f.index_mode = 'index' OR (f.index_mode <> 'noindex' AND ${CERT})))`;
+const where: string[] = ['1 = 1'];
+const params: (string | number)[] = [];
+if (['pending', 'published', 'rejected', 'unpublished'].includes(statut)) { where.push('f.status = ?'); params.push(statut); }
+if (plan === 'paid') where.push(CERT);
+if (plan === 'pro') where.push(`${CERT} AND f.plan <> 'premium'`);
+if (plan === 'premium') where.push(`${CERT} AND f.plan = 'premium'`);
+if (plan === 'free') where.push(`NOT ${CERT}`);
+if (plan === 'ending') where.push("f.pro_status IN ('canceled', 'past_due')");
+if (['user', 'osm', 'admin'].includes(source)) { where.push('f.source = ?'); params.push(source); }
+if (proprio === '1') where.push('f.owner_id IS NOT NULL');
+if (proprio === '0') where.push('f.owner_id IS NULL');
+if (index === '1') where.push(IDX);
+if (index === '0') where.push(`NOT ${IDX}`);
+if (index === 'forced') where.push("f.index_mode <> 'auto'");
+for (const t of normalize(q).split(/\s+/).filter(Boolean)) { where.push('(f.search LIKE ? OR u.email LIKE ? OR f.slug LIKE ?)'); params.push(`%${t}%`, `%${t}%`, `%${t}%`); }
+const sql = where.join(' AND ');
+const total = get<{ n: number }>(`SELECT COUNT(*) n FROM fiches f LEFT JOIN users u ON u.id = f.owner_id WHERE ${sql}`, ...params)!.n;
+const rows = all(
+  `SELECT f.*, u.email AS owner_email FROM fiches f LEFT JOIN users u ON u.id = f.owner_id WHERE ${sql}
+   ORDER BY CASE f.status WHEN 'pending' THEN 0 ELSE 1 END, f.updated_at DESC LIMIT ? OFFSET ?`,
+  ...params, per, (page - 1) * per,
+).map((r: any) => ({ ...parseFiche(r), owner_email: r.owner_email as string | null }));
+
+const tabs = [
+  { label: 'Toutes', href: '/admin/fiches', on: !statut && !plan && !index },
+  { label: 'À valider', href: '/admin/fiches?statut=pending', on: statut === 'pending', n: get<{ n: number }>("SELECT COUNT(*) n FROM fiches WHERE status = 'pending'")!.n },
+  { label: 'Payantes', href: '/admin/fiches?plan=paid', on: plan === 'paid' },
+  { label: 'Indexées', href: '/admin/fiches?index=1', on: index === '1' },
+  { label: 'Non indexées', href: '/admin/fiches?index=0', on: index === '0' },
+];
+const STATUS: Record<string, [string, string]> = { published: ['chip-ok', 'Publiée'], pending: ['chip-warn', 'À valider'], rejected: ['chip-err', 'Refusée'], unpublished: ['chip-off', 'Dépubliée'] };
+const sel = (name: string, value: string, options: [string, string][]) => ({ name, value, options });
+const filters = [
+  sel('statut', statut, [['', 'Tous statuts'], ['pending', 'À valider'], ['published', 'Publiées'], ['rejected', 'Refusées'], ['unpublished', 'Dépubliées']]),
+  sel('plan', plan, [['', 'Toutes formules'], ['paid', 'Payantes'], ['pro', 'Pro'], ['premium', 'Premium'], ['free', 'Gratuites'], ['ending', 'Résiliées / impayées']]),
+  sel('index', index, [['', 'Indexation'], ['1', 'Indexées'], ['0', 'Non indexées'], ['forced', 'Réglage forcé par un admin']]),
+  sel('source', source, [['', 'Toutes sources'], ['user', 'Créées par un pro'], ['osm', 'Import OSM'], ['admin', 'Créées par un admin']]),
+  sel('proprio', proprio, [['', 'Propriétaire'], ['1', 'Revendiquées'], ['0', 'Non revendiquées']]),
+];
+---
+<Admin title="Fiches" subtitle={`${total.toLocaleString('fr-FR')} fiche(s)`} wide>
+  <nav class="tabs" aria-label="Vues rapides">
+    {tabs.map((t) => <a href={t.href} aria-current={t.on ? 'page' : undefined}>{t.label}{t.n ? <span>{t.n}</span> : null}</a>)}
+    <a class="btn gradient-bg new" href="/admin/fiches/nouvelle">+ Nouvelle fiche</a>
+  </nav>
+
+  <form class="toolbar panel filters" method="get">
+    <span class="f-search"><Icon name="search" size={16} /><input type="search" name="q" value={q} placeholder="Nom, ville, email du propriétaire…" /></span>
+    {filters.map((f) => (
+      <select name={f.name} class="sel" aria-label={f.options[0][1]}>
+        {f.options.map(([v, l]) => <option value={v} selected={f.value === v}>{l}</option>)}
+      </select>
+    ))}
+    <button class="btn btn-ghost" type="submit">Filtrer</button>
+    {(q || statut || plan || index || source || proprio) && <a class="reset" href="/admin/fiches">Effacer</a>}
+  </form>
+
+  <form method="post" data-bulk>
+    <div class="bulkbar" data-bulkbar hidden>
+      <strong data-bulk-count>0</strong> sélectionnée(s)
+      <select name="bulk" class="sel" required>
+        <option value="">Action groupée…</option>
+        <option value="publish">Publier</option>
+        <option value="unpublish">Dépublier</option>
+        <option value="index">Forcer l'indexation</option>
+        <option value="noindex">Ne pas indexer</option>
+        <option value="auto">Indexation automatique</option>
+      </select>
+      <button class="btn gradient-bg btn-sm" type="submit">Appliquer</button>
+    </div>
+
+    <div class="table-wrap">
+      <table class="table">
+        <thead>
+          <tr>
+            <th class="cb"><input type="checkbox" data-all aria-label="Tout sélectionner" /></th>
+            <th>Fiche</th><th>Catégorie · ville</th><th>Statut</th><th>Formule</th><th>Google</th><th>Propriétaire</th><th class="r">Vues</th><th>Modifiée</th><th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((f) => {
+            const idx = isIndexable(f);
+            return (
+              <tr>
+                <td class="cb"><input type="checkbox" name="ids" value={f.id} data-row aria-label={`Sélectionner ${f.name}`} /></td>
+                <td>
+                  <a class="who" href={`/admin/fiches/${f.id}`}>
+                    <Avatar name={f.name} src={f.logo} size={34} />
+                    <span><strong>{f.name}</strong><small>/{f.slug}</small></span>
+                  </a>
+                </td>
+                <td><span class="two">{categoryName(f.category)}<small>{f.city}</small></span></td>
+                <td><span class:list={['chip', STATUS[f.status][0]]}>{STATUS[f.status][1]}</span></td>
+                <td>{f.certified ? <span class:list={['chip', f.premium ? 'chip-prem' : 'chip-pro']}>{f.premium ? 'Premium' : 'Pro'}</span> : <span class="chip chip-off">Gratuite</span>}</td>
+                <td>
+                  <span class:list={['chip', idx ? 'chip-ok' : 'chip-off']} title={f.index_mode === 'auto' ? 'Automatique (selon la formule)' : 'Réglage forcé par un admin'}>
+                    {idx ? 'Indexée' : 'Noindex'}{f.index_mode !== 'auto' && ' ★'}
+                  </span>
+                </td>
+                <td class="muted small">{f.owner_email ?? '—'}</td>
+                <td class="r">{f.views}</td>
+                <td class="muted small nowrap">{f.updated_at.slice(0, 10)}</td>
+                <td class="r nowrap">
+                  <a class="ic" href={`/admin/fiches/${f.id}`} title="Modifier"><Icon name="edit" size={16} /></a>
+                  <a class="ic" href={`/${f.slug}`} target="_blank" title="Voir la fiche"><Icon name="external" size={16} /></a>
+                </td>
+              </tr>
+            );
+          })}
+          {rows.length === 0 && <tr><td colspan="10" class="muted">Aucune fiche ne correspond à ces filtres.</td></tr>}
+        </tbody>
+      </table>
+    </div>
+  </form>
+  <Pagination page={page} total={total} perPage={per} url={Astro.url} />
+  <p class="muted legend">★ indexation forcée par un administrateur. Sinon, une fiche est indexée automatiquement si elle a une formule Pro ou Premium.</p>
+</Admin>
+
+<script>
+  const form = document.querySelector<HTMLFormElement>('[data-bulk]');
+  if (form) {
+    const bar = form.querySelector<HTMLElement>('[data-bulkbar]')!;
+    const count = form.querySelector<HTMLElement>('[data-bulk-count]')!;
+    const all = form.querySelector<HTMLInputElement>('[data-all]')!;
+    const rows = [...form.querySelectorAll<HTMLInputElement>('[data-row]')];
+    const sync = () => {
+      const n = rows.filter((r) => r.checked).length;
+      count.textContent = String(n);
+      bar.hidden = n === 0;
+      all.checked = n > 0 && n === rows.length;
+      all.indeterminate = n > 0 && n < rows.length;
+    };
+    all.addEventListener('change', () => { rows.forEach((r) => (r.checked = all.checked)); sync(); });
+    rows.forEach((r) => r.addEventListener('change', sync));
+  }
+</script>
+
+<style>
+  .tabs { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem; margin-bottom: 1rem; border-bottom: 1px solid #e6e7ef; }
+  .tabs a:not(.btn) { display: inline-flex; align-items: center; gap: .4rem; padding: .6rem .9rem; font-weight: 600; font-size: .9rem; color: #667085; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+  .tabs a:not(.btn):hover { color: var(--text); }
+  .tabs a[aria-current] { color: var(--accent); border-bottom-color: var(--accent); }
+  .tabs a span { padding: 0 .45rem; border-radius: 999px; background: #fef0c7; color: #b54708; font-size: .72rem; }
+  .tabs .new { margin-left: auto; margin-bottom: .4rem; }
+  .filters { padding: .6rem; }
+  .f-search { flex: 1 1 16rem; display: flex; align-items: center; gap: .5rem; padding: .5rem .8rem; border: 1px solid #e1e2ec; border-radius: 10px; color: #98a2b3; }
+  .f-search input { flex: 1; border: 0; outline: 0; font: inherit; font-size: .9rem; background: none; color: var(--text); }
+  .reset { color: var(--accent); font-weight: 600; font-size: .88rem; }
+  .bulkbar { position: sticky; top: 4.2rem; z-index: 5; display: flex; align-items: center; gap: .75rem; margin-bottom: .6rem; padding: .6rem .9rem; border-radius: 12px; background: #15143a; color: #fff; font-size: .9rem; }
+  .bulkbar[hidden] { display: none; }
+  .bulkbar .sel { padding: .4rem .6rem; }
+  .cb { width: 2.2rem; }
+  .cb input { width: 1rem; height: 1rem; accent-color: var(--accent); }
+  .who { display: flex; align-items: center; gap: .65rem; }
+  .who span, .two { display: flex; flex-direction: column; min-width: 0; }
+  .who strong { color: var(--text); }
+  .who small, .two small { color: #98a2b3; font-size: .76rem; font-weight: 500; }
+  .who:hover strong { color: var(--accent); }
+  .small { font-size: .82rem; }
+  .r { text-align: right; }
+  .nowrap { white-space: nowrap; }
+  .ic { display: inline-grid; place-items: center; width: 30px; height: 30px; border-radius: 8px; color: #667085; }
+  .ic:hover { background: #eef0ff; color: var(--accent); }
+  .legend { font-size: .8rem; margin-top: 1rem; }
+</style>

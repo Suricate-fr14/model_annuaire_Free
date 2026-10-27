@@ -1,0 +1,43 @@
+---
+import Legal from '../layouts/Legal.astro';
+import { SITE, CITY } from '../config';
+const L = SITE.legal;
+---
+<Legal title="Mentions légales" description={`Mentions légales de l'${SITE.fullName} : éditeur, hébergeur, propriété intellectuelle et droit applicable.`}>
+  <p>Conformément à l'article 6 de la loi n° 2004-575 du 21 juin 2004 pour la confiance dans l'économie numérique (LCEN), voici les informations relatives à l'éditeur et à l'hébergeur de l'{SITE.fullName}.</p>
+
+  <h2>Éditeur du site</h2>
+  <dl>
+    <dt>Raison sociale</dt><dd>{L.company}</dd>
+    <dt>Forme juridique</dt><dd>{L.form}</dd>
+    <dt>SIRET</dt><dd>{L.siret}</dd>
+    <dt>N° de TVA</dt><dd>{L.vat}</dd>
+    <dt>Adresse</dt><dd>{L.address}</dd>
+    <dt>Directeur de la publication</dt><dd>{L.director}</dd>
+  </dl>
+  <p>L'{SITE.fullName} est un service associé au site <a href={SITE.parent.url}>{SITE.parent.name}</a> (site non officiel, sans lien avec la Ville {CITY.of}).</p>
+
+  <h2>Hébergeur</h2>
+  <dl>
+    <dt>Société</dt><dd>{L.host.name}</dd>
+    <dt>Adresse</dt><dd>{L.host.address}</dd>
+    <dt>Téléphone</dt><dd>{L.host.phone}</dd>
+    <dt>Site web</dt><dd><a href={L.host.url} rel="noopener">{L.host.url.replace(/^https?:\/\/(www\.)?/, '')}</a></dd>
+  </dl>
+
+  <h2>Propriété intellectuelle</h2>
+  <p>La structure du site, sa charte graphique, ses textes, son logiciel et la base de données de l'annuaire (au sens des articles L.341-1 et suivants du Code de la propriété intellectuelle) sont la propriété de {L.company} ou de ses partenaires et sont protégés par les lois françaises et internationales relatives au droit d'auteur et au droit des producteurs de bases de données. Toute reproduction ou extraction substantielle, même partielle, sans autorisation écrite est interdite.</p>
+  <p>Les noms, logos, photos et descriptions des établissements restent la propriété de leurs titulaires, qui les publient sous leur responsabilité. Une partie des données d'établissements provient de bases ouvertes réutilisées conformément à leur licence : voir <a href="/sources-et-donnees">Sources des données</a>.</p>
+
+  <h2>Données personnelles et cookies</h2>
+  <p>Les traitements de données personnelles (comptes, fiches, revendications, paiements) et les cookies utilisés sont détaillés dans la <a href="/confidentialite">politique de confidentialité</a>. Pour exercer vos droits : <a href={`mailto:${L.email}`}>{L.email}</a>.</p>
+
+  <h2>Responsabilité</h2>
+  <p>Les informations publiées (horaires, coordonnées, services, tarifs) sont fournies à titre indicatif. Elles proviennent des professionnels eux-mêmes ou de sources ouvertes et peuvent comporter des erreurs ou ne plus être à jour : vérifiez-les auprès de l'établissement avant tout déplacement. {L.company} ne saurait être tenue responsable des contenus publiés par les professionnels, ni des sites tiers vers lesquels pointent les liens. Tout contenu inexact ou illicite peut être signalé depuis le lien « Signaler une erreur » présent sur chaque fiche.</p>
+
+  <h2>Signaler un contenu ou demander une modification</h2>
+  <p>Professionnel : revendiquez votre fiche pour la modifier, ou écrivez-nous pour demander sa suppression. Toute autre demande : <a href={`mailto:${L.email}`}>{L.email}</a>.</p>
+
+  <h2>Droit applicable et juridiction</h2>
+  <p>Le présent site et ses mentions légales sont régis par le droit français. En cas de litige et à défaut de résolution amiable, les tribunaux compétents de {L.court} sont seuls compétents, sous réserve des règles impératives applicables aux consommateurs.</p>
+</Legal>

@@ -1,0 +1,10 @@
+node_modules/
+/dist/
+.astro/
+# Base SQLite, images envoyées et cache OSM (dossier racine uniquement)
+/data/
+.env
+.env.*
+!.env.example
+.claude/
+*.log

@@ -1,0 +1,73 @@
+---
+import Legal from '../layouts/Legal.astro';
+import { SITE, CITY } from '../config';
+import { stats } from '../lib/fiches';
+import { get } from '../lib/db';
+
+const s = stats();
+const osm = get<{ n: number }>("SELECT COUNT(*) n FROM fiches WHERE status = 'published' AND source = 'osm' AND owner_id IS NULL")?.n ?? 0;
+const claimed = get<{ n: number }>("SELECT COUNT(*) n FROM fiches WHERE status = 'published' AND owner_id IS NOT NULL")?.n ?? 0;
+const L = SITE.legal;
+---
+<Legal title="Sources des données" description={`D'où viennent les informations de l'${SITE.fullName} : professionnels, OpenStreetMap, Base Adresse Nationale, et comment elles sont mises à jour.`}>
+  <p>L'{SITE.fullName} recense {s.total.toLocaleString('fr-FR')} établissements à {CITY.name} et dans {s.cities.length - 1} communes voisines. Voici d'où viennent ces informations, comment elles sont tenues à jour et quels services tiers le site utilise.</p>
+
+  <h2>Origine des fiches</h2>
+  <table>
+    <thead><tr><th>Source</th><th>Contenu</th><th>Fiches</th></tr></thead>
+    <tbody>
+      <tr><td>Professionnels</td><td>Fiches créées ou revendiquées par les établissements eux-mêmes, après vérification par notre équipe.</td><td>{claimed.toLocaleString('fr-FR')}</td></tr>
+      <tr><td><a href="https://www.openstreetmap.org/" rel="noopener">OpenStreetMap</a></td><td>Nom, catégorie, horaires, téléphone, réseaux sociaux et services des fiches non revendiquées.</td><td>{osm.toLocaleString('fr-FR')}</td></tr>
+    </tbody>
+  </table>
+  <p>Dès qu'un établissement revendique sa fiche, ce sont ses propres informations qui font foi ; elles ne sont plus remplacées par les mises à jour automatiques.</p>
+
+  <h2>OpenStreetMap (licence ODbL)</h2>
+  <p>Une partie des données provient d'OpenStreetMap, base de données géographique collaborative. Ces données sont © <a href="https://www.openstreetmap.org/copyright" rel="noopener">les contributeurs d'OpenStreetMap</a> et sont mises à disposition sous la licence <a href="https://opendatacommons.org/licenses/odbl/" rel="noopener">Open Database License (ODbL) 1.0</a>. Chaque fiche issue d'OpenStreetMap renvoie vers l'objet d'origine. Les données sont réutilisées après classement dans nos catégories et lecture des horaires ; toute base de données dérivée rendue publique reste soumise à la licence ODbL.</p>
+
+  <h2>Adresses et communes</h2>
+  <ul>
+    <li><strong>Base Adresse Nationale</strong>, via le service de géocodage de la <a href="https://geoservices.ign.fr/" rel="noopener">Géoplateforme de l'IGN</a> : complétion et vérification des adresses, autocomplétion dans le formulaire de création de fiche (licence Etalab 2.0).</li>
+    <li><strong>API Découpage administratif</strong> (<a href="https://geo.api.gouv.fr/" rel="noopener">geo.api.gouv.fr</a>) : rattachement de chaque fiche à sa commune officielle et à son code postal.</li>
+  </ul>
+
+  <h2>Cartes et itinéraires</h2>
+  <p>Les plans d'accès (fiches Pro et Premium) et les liens « Itinéraire » utilisent <strong>Google Maps</strong>. La carte n'est chargée que sur les fiches concernées ; Google peut alors déposer ses propres cookies, selon sa <a href="https://policies.google.com/privacy?hl=fr" rel="noopener">politique de confidentialité</a>.</p>
+
+  <h2>Mises à jour et corrections</h2>
+  <ul>
+    <li>Les fiches non revendiquées sont actualisées périodiquement à partir des sources ouvertes.</li>
+    <li>Tout visiteur peut signaler une erreur (horaires, adresse, fermeture définitive…) depuis la fiche ; chaque signalement est examiné.</li>
+    <li>Un professionnel peut <a href="/creer-ma-fiche">revendiquer sa fiche</a> pour la gérer, ou demander sa suppression à <a href={`mailto:${L.email}`}>{L.email}</a>.</li>
+  </ul>
+
+  <h2 id="avis-google">Avis Google</h2>
+  <p>Certaines fiches présentent les avis publiés par leurs clients sur Google. Ces avis sont recueillis et publiés par Google, pas par l'annuaire : nous ne les sollicitons pas, ne les rémunérons pas et ne vérifions pas que leurs auteurs ont réellement eu recours à l'établissement.</p>
+  <ul>
+    <li><strong>Note et nombre d'avis</strong> : identiques à ceux affichés par Google ; la note est la moyenne de tous les avis Google de l'établissement, quelle que soit leur note.</li>
+    <li><strong>Avis affichés</strong> : les 8 derniers avis accompagnés d'un commentaire, quelle que soit leur note, présentés du plus récent au plus ancien. Aucun tri selon la note n'est appliqué ; l'ensemble des avis reste consultable sur la fiche Google de l'établissement. La date de la dernière mise à jour est indiquée sous les avis.</li>
+    <li><strong>Contenu</strong> : texte, note, date, nom et photo de profil de l'auteur tels que publiés sur Google, sans modification (les commentaires très longs peuvent être abrégés). La réponse de l'établissement est affichée lorsqu'elle existe.</li>
+    <li><strong>Mise à jour</strong> : les avis sont actualisés chaque semaine. Un avis supprimé sur Google disparaît de la fiche à la mise à jour suivante.</li>
+  </ul>
+  <p>Un établissement ou l'auteur d'un avis peut demander le retrait d'un avis ou du bloc d'avis à <a href={`mailto:${L.email}`}>{L.email}</a>.</p>
+
+  <h2>Classement des résultats</h2>
+  <p>Dans chaque catégorie et chaque ville, les fiches sont présentées dans cet ordre : formule Premium, formule Pro, puis fiches gratuites, chaque groupe étant trié par ordre alphabétique. Les sélections « À découvrir aujourd'hui » et « Univers du jour » changent chaque jour, avec une priorité aux fiches Premium. Les fiches payantes portent le badge « fiche certifiée ».</p>
+
+  <h2>Référencement par les moteurs de recherche</h2>
+  <p>Les pages d'univers, de catégories et de villes sont proposées aux moteurs de recherche. Les fiches le sont lorsqu'elles bénéficient d'une formule Pro ou Premium ; les fiches gratuites restent consultables dans l'annuaire mais portent la balise « noindex ». Seuls les liens vers les réseaux sociaux des fiches portent l'attribut « nofollow ».</p>
+
+  <h2>Services tiers</h2>
+  <table>
+    <thead><tr><th>Service</th><th>Usage</th></tr></thead>
+    <tbody>
+      <tr><td>{L.host.name}</td><td>Hébergement du site et de la base de données</td></tr>
+      <tr><td>Stripe</td><td>Paiement des formules Pro et Premium (aucune donnée bancaire n'est stockée par l'annuaire)</td></tr>
+      <tr><td>Resend</td><td>Envoi des emails de service (validation, mot de passe, abonnement)</td></tr>
+      <tr><td>Google Maps</td><td>Plans d'accès et itinéraires</td></tr>
+      <tr><td>DataForSEO</td><td>Récupération des notes et avis Google affichés sur certaines fiches</td></tr>
+      <tr><td>Géoplateforme IGN, geo.api.gouv.fr</td><td>Adresses et communes</td></tr>
+    </tbody>
+  </table>
+  <p>Le traitement de vos données personnelles est décrit dans la <a href="/confidentialite">politique de confidentialité</a>.</p>
+</Legal>

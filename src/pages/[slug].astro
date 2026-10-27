@@ -1,0 +1,562 @@
+---
+import Base from '../layouts/Base.astro';
+import Avatar from '../components/Avatar.astro';
+import Name from '../components/Name.astro';
+import Breadcrumb from '../components/Breadcrumb.astro';
+import FicheCard from '../components/FicheCard.astro';
+import OpenBadge from '../components/OpenBadge.astro';
+import Icon from '../components/Icon.astro';
+import { SITE, ENV, PLANS, planLabel } from '../config';
+import { photoLimit } from '../lib/ficheForm';
+import { getFicheBySlug, nearby, countView, isIndexable, showsContact, acceptsLeads, activeNews } from '../lib/fiches';
+import { parseLeadForm, createLead, REQUEST_TYPES, TIMINGS, LEADS_PRIVACY, type LeadInput } from '../lib/leads';
+import { rateLimited, clientIp } from '../lib/auth';
+import { queueEvent } from '../lib/analytics';
+import { youtubeThumb, MAX_VIDEOS } from '../lib/video';
+import { ficheTitle, ficheDescription } from '../lib/seo';
+import { categoryInfo, categoryUrl, universeUrl } from '../lib/taxonomy';
+import { DAYS, DAY_LABELS, dayText, localNow } from '../lib/hours';
+import { ficheGraph } from '../lib/schema';
+import { NETWORKS } from '../lib/social';
+import { featureLabel, languageLabel, credentialList } from '../lib/features';
+import { mapEmbedUrl, directionsUrl } from '../lib/geo';
+import { phoneMasked, host } from '../lib/text';
+import { withUtm } from '../lib/utm';
+import { ogPathForFiche } from '../lib/ogImage';
+import GoogleReviews from '../components/GoogleReviews.astro';
+import { getGoogleReviews } from '../lib/googleReviews';
+import { isAdmin } from '../lib/auth';
+
+const f = getFicheBySlug(Astro.params.slug ?? '');
+const user = Astro.locals.user;
+const isOwner = !!f && !!user && f.owner_id === user.id;
+const canPreview = isOwner || isAdmin(user);
+if (!f || (f.status !== 'published' && !canPreview)) return new Response(null, { status: 404, statusText: 'Fiche introuvable' });
+// Vues : visiteurs uniquement (les robots d'exploration faussent les statistiques et ralentissent l'affichage par les écritures).
+const isBot = /bot|crawl|spider|slurp|preview|fetch|monitor|lighthouse|headless|curl|wget|python|axios|httpclient/i.test(Astro.request.headers.get('user-agent') ?? '');
+if (f.status === 'published' && !canPreview && Astro.request.method === 'GET' && !isBot) countView(f.id);
+
+// Téléphone et email : affichés avec Pro et Premium. Formulaire de demande de contact : Premium + « J'achète des leads ».
+const contact = showsContact(f);
+const news = activeNews(f);
+const newsUntil = f.news_until ? new Date(`${f.news_until}T12:00:00`).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long' }) : '';
+const leadsOn = acceptsLeads(f);
+let leadErrors: string[] = [];
+let lead: Partial<LeadInput> = {};
+if (Astro.request.method === 'POST' && leadsOn) {
+  const form = await Astro.request.formData();
+  const { data, errors } = parseLeadForm(form);
+  lead = data;
+  leadErrors = errors;
+  const ip = clientIp(Astro.request, Astro.clientAddress);
+  if (String(form.get('lead_hp') ?? '')) leadErrors = ['Envoi refusé.']; // champ piège anti-robots
+  else if (!leadErrors.length && (rateLimited(`lead:${ip}`, 5, 3600e3) || rateLimited(`lead:${ip}:${f.id}`, 2, 24 * 3600e3))) {
+    leadErrors = ['Vous avez déjà envoyé plusieurs demandes : réessayez plus tard.'];
+  }
+  if (!leadErrors.length) {
+    await createLead(f, data);
+    queueEvent(Astro.cookies, 'generate_lead', { fiche_id: f.id, lead_type: data.request_type });
+    return Astro.redirect(`/${f.slug}?demande=envoyee#demande`);
+  }
+}
+const leadSent = Astro.url.searchParams.get('demande') === 'envoyee';
+
+const info = categoryInfo(f.category)!;
+const cat = info.category;
+const uni = info.universe;
+// Site internet : lien suivi (noopener protège seulement l'ouverture dans un nouvel onglet). Réseaux sociaux : nofollow.
+const outRel = 'noopener';
+const socialRel = 'nofollow noopener';
+const indexable = isIndexable(f);
+const website = f.certified ? f.website : '';
+// Avis Google (DataForSEO) : Pro (4 avis) et Premium (8 avis), dès qu'une note a été récupérée.
+const greviews = (() => { const g = f.certified ? getGoogleReviews(f.id) : null; return g && g.rating != null && g.count > 0 ? g : null; })();
+const address = [f.street, [f.postcode, f.city].filter(Boolean).join(' ')].filter(Boolean).join(', ');
+const hasGeo = f.lat != null && f.lng != null;
+const today = localNow(SITE.timezone).day;
+const socialLinks = NETWORKS.filter((n) => f.socials[n.key]).map((n) => ({ ...n, url: f.socials[n.key] }));
+const related = nearby(f, 4);
+// Plan d'accès et présentation détaillée : réservés aux formules payantes. Exception : la présentation rédigée par
+// l'annuaire des fiches non revendiquées (npm run db:descriptions) est affichée.
+const showMap = hasGeo && f.certified;
+const paragraphs = !(f.certified || !f.owner_id) ? [] : f.description.split(/\n{2,}/).map((p) => p.trim()).filter(Boolean);
+
+const title = ficheTitle(f);
+const description = ficheDescription(f);
+// Contexte GTM : dimensions de la fiche consultée (reprises par tous ses événements de clic).
+const ficheContext = {
+  page_type: 'fiche', fiche_id: f.id, fiche_name: f.name, fiche_category: cat.name, fiche_universe: uni.name,
+  fiche_city: f.city || '', fiche_plan: f.certified ? (f.premium ? 'premium' : 'pro') : 'gratuit',
+};
+// Bannière (image de couverture) : Pro et Premium. Sert aussi d'image de partage sur les réseaux sociaux.
+const banner = f.certified ? f.banner : '';
+const shareImage = banner || (f.certified ? f.photos[0] : '') || f.logo || '';
+const jsonLd = ficheGraph(f, { title, description, showWebsite: !!website, photos: f.certified ? f.photos.slice(0, photoLimit(f)) : [], banner });
+---
+<Base title={title} description={description} jsonLd={jsonLd} image={shareImage || (f.status === 'published' ? ogPathForFiche(f.slug) : undefined)} noindex={!indexable} dataLayer={ficheContext} events={f.status === 'published' ? [{ event: 'view_fiche' }] : []}>
+  {f.status !== 'published' && (
+    <div class="preview wrap">
+      <Icon name="eye" /> Aperçu : cette fiche est <strong>{({ pending: 'en attente de validation', rejected: 'refusée', unpublished: 'dépubliée' } as Record<string, string>)[f.status]}</strong> et n'est pas visible du public.
+      {f.reject_reason && <> Motif : {f.reject_reason}</>}
+    </div>
+  )}
+
+  {f.status === 'published' && !indexable && canPreview && (
+    <div class="preview noidx wrap">
+      <Icon name="info" /> Cette fiche est visible dans l'annuaire mais <strong>n'est pas référencée sur Google</strong>{f.index_mode === 'noindex' ? ' (choix de l’administrateur).' : ' : le référencement est inclus dans les formules Pro et Premium.'}
+      {isOwner && !f.certified && <a href={`/compte/fiches/${f.id}/abonnement`}>Voir les formules</a>}
+    </div>
+  )}
+  <div class="wrap">
+    <div class="crumbs-wrap">
+      <Breadcrumb items={[
+        { name: 'Annuaire', href: '/annuaire' },
+        { name: uni.name, href: universeUrl(uni) },
+        { name: cat.name, href: categoryUrl(uni, cat) },
+        { name: f.name },
+      ]} />
+    </div>
+
+    <header class:list={['head', 'panel', { 'has-banner': banner }]} data-fiche-id={f.id}>
+      {banner && <div class="banner"><img src={banner} alt={`${f.name}, bannière`} width="1600" height="500" fetchpriority="high" /></div>}
+      <Avatar name={f.name} src={f.logo} size={96} />
+      <div class="head-txt">
+        <h1><Name name={f.name} certified={f.certified} /></h1>
+        <p class="meta">
+          <a class="cat" href={categoryUrl(uni, cat)}>{cat.name}</a>
+          {f.city && <span><Icon name="pin" size={15} /> {f.city}</span>}
+          <OpenBadge hours={f.hours} size="md" />
+          {f.certified && f.price_from && <span class="price">À partir de {f.price_from} €</span>}
+          {greviews && <a class="g-chip" href="#avis"><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M12 2.5l2.9 6.1 6.6.8-4.9 4.6 1.3 6.6L12 17.3l-5.9 3.3 1.3-6.6-4.9-4.6 6.6-.8z" /></svg> {greviews.rating!.toLocaleString('fr-FR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} <span>({greviews.count.toLocaleString('fr-FR')} avis Google)</span></a>}
+        </p>
+        <p class="short">{f.short_desc}</p>
+        <div class="actions">
+          {!contact && f.phone && f.status === 'published' && <button type="button" class="btn gradient-bg" data-track="phone_locked" data-ev="click_phone_locked" data-locked-phone aria-controls="phone-locked" aria-expanded="false"><Icon name="phone" size={16} /> Afficher le téléphone</button>}
+          {contact && f.phone && <button type="button" class="btn gradient-bg" data-reveal="phone" data-track="phone" data-ev="click_phone" title="Afficher le numéro"><Icon name="phone" size={16} /> <span data-reveal-text>{phoneMasked(f.phone)}</span></button>}
+          {hasGeo && <a class="btn btn-ghost" href={directionsUrl(f.lat!, f.lng!)} target="_blank" rel="noopener" data-track="route" data-ev="click_directions"><Icon name="route" size={16} /> Itinéraire</a>}
+          {website && <a class="btn btn-ghost" href={withUtm(website, 'bouton', f.slug)} target="_blank" rel={outRel} data-track="web" data-ev="click_website"><Icon name="globe" size={16} /> Site internet</a>}
+          {contact && f.email && <button type="button" class="btn btn-ghost" data-reveal="email" data-ev="click_email"><Icon name="mail" size={16} /> <span data-reveal-text>Email</span></button>}
+          {leadsOn && <a class="btn btn-ghost devis-btn" href="#demande" data-ev="lead_cta"><Icon name="edit" size={16} /> Demander un devis</a>}
+          <button type="button" class="btn btn-ghost" data-share data-title={f.name} data-ev="share"><Icon name="link" size={16} /> <span data-share-label>Partager</span></button>
+          {(isOwner || isAdmin(user)) && <a class="btn btn-ghost" href={isOwner ? `/compte/fiches/${f.id}` : `/admin/fiches/${f.id}`}><Icon name="edit" size={16} /> Modifier</a>}
+        </div>
+        {!contact && f.phone && (
+          <div class="locked-note" id="phone-locked" hidden>
+            <Icon name="info" size={16} />
+            {f.owner_id
+              ? <p>Le numéro de cet établissement n'est pas encore affiché sur l'annuaire. {hasGeo && 'Utilisez l\'itinéraire pour vous rendre sur place.'}</p>
+              : <p>Le numéro de cet établissement n'est pas affiché sur l'annuaire. Vous êtes ce professionnel ? <a href={`/revendiquer/${f.slug}`}>Revendiquez gratuitement votre fiche</a> pour gérer vos coordonnées.</p>}
+          </div>
+        )}
+      </div>
+    </header>
+
+    {news && (
+      <aside class="news panel" aria-labelledby="t-news">
+        <span class="news-k">Actualité</span>
+        <div class="news-c">
+          <h2 id="t-news">{f.news_title}</h2>
+          {f.news_text && <p>{f.news_text}</p>}
+          {newsUntil && <p class="news-u">Jusqu'au {newsUntil}</p>}
+        </div>
+        {f.news_link && <a class="btn gradient-bg" href={withUtm(f.news_link, 'actualite', f.slug)} target="_blank" rel="noopener" data-ev="click_news">En savoir plus</a>}
+      </aside>
+    )}
+
+    {greviews && <GoogleReviews data={greviews} name={f.name} max={f.premium ? 8 : 4} />}
+
+    <div class="layout">
+      <div class="main">
+        <section class="panel" aria-labelledby="t-about">
+          <h2 id="t-about">Présentation</h2>
+          {paragraphs.length ? paragraphs.map((p) => <p class="para">{p}</p>) : <p class="para">{f.short_desc}</p>}
+          {f.features.length > 0 && (
+            <>
+              <h3>Services et équipements</h3>
+              <ul class="features">{f.features.map((k) => <li><Icon name="check" size={15} /> {featureLabel(k)}</li>)}</ul>
+            </>
+          )}
+          {(f.founded || f.area_served || credentialList(f.credentials).length > 0 || f.languages.length > 0) && (
+            <>
+              <h3>En bref</h3>
+              <dl class="infos">
+                {f.founded && <div><dt>Création</dt><dd>Depuis {f.founded}</dd></div>}
+                {f.area_served && <div><dt>Zone d'intervention</dt><dd>{f.area_served}</dd></div>}
+                {credentialList(f.credentials).length > 0 && <div><dt>Labels et certifications</dt><dd>{credentialList(f.credentials).join(' · ')}</dd></div>}
+                {f.languages.length > 0 && <div><dt>Langues parlées</dt><dd>Français, {f.languages.map((k) => languageLabel(k).toLowerCase().replace('(lsf)', '(LSF)')).join(', ')}</dd></div>}
+              </dl>
+            </>
+          )}
+        </section>
+
+        {f.certified && f.refs.length > 0 && (
+          <section class="panel" aria-labelledby="t-refs">
+            <h2 id="t-refs">Nos références clients</h2>
+            <ul class="refs">
+              {f.refs.map((r) => (
+                <li><img src={r.logo} alt={r.name || 'Référence client'} loading="lazy" />{r.name && <span>{r.name}</span>}</li>
+              ))}
+            </ul>
+          </section>
+        )}
+
+        {f.certified && f.photos.length > 0 && (
+          <section class="panel" aria-labelledby="t-photos">
+            <h2 id="t-photos">Photos</h2>
+            <div class="gallery">
+              {f.photos.slice(0, photoLimit(f)).map((p, i) => <a href={p} target="_blank"><img src={p} alt={`${f.name}, photo ${i + 1}`} loading="lazy" /></a>)}
+            </div>
+          </section>
+        )}
+
+        {showMap && (
+          <section class="panel map-panel" aria-labelledby="t-map">
+            <h2 id="t-map">Plan d'accès</h2>
+            <p class="addr"><Icon name="pin" size={16} /> {address || f.city}</p>
+            <div class="map">
+              <iframe title={`Carte : ${f.name}`} src={mapEmbedUrl(f.lat!, f.lng!)} loading="lazy" referrerpolicy="no-referrer-when-downgrade" allowfullscreen></iframe>
+            </div>
+            <p class="map-links">
+              <a href={directionsUrl(f.lat!, f.lng!)} target="_blank" rel="noopener" data-track="route" data-ev="click_directions">Calculer un itinéraire →</a>
+              <span class="muted">Coordonnées : {f.lat!.toFixed(5)}, {f.lng!.toFixed(5)}</span>
+            </p>
+          </section>
+        )}
+
+        {f.premium && f.videos.length > 0 && (
+          <section class="panel" aria-labelledby="t-videos">
+            <h2 id="t-videos">Vidéos</h2>
+            <div class="videos">
+              {f.videos.slice(0, MAX_VIDEOS).map((id, i) => (
+                <button type="button" class="video" data-video={id} data-ev="play_video" aria-label={`Lire la vidéo ${i + 1} de ${f.name}`}>
+                  <img src={youtubeThumb(id)} alt="" loading="lazy" width="480" height="360" />
+                  <span class="play" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z" fill="currentColor"></path></svg></span>
+                </button>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {leadsOn && (
+          <section class="panel lead-panel" id="demande" aria-labelledby="t-lead">
+            <h2 id="t-lead">Demander un devis à {f.name}</h2>
+            <p class="muted">Gratuit et sans engagement. Votre demande est vérifiée par notre équipe puis transmise au professionnel, qui vous recontacte directement.</p>
+            {leadSent ? (
+              <div class="lead-ok" role="status">
+                <Icon name="check" size={20} />
+                <div>
+                  <p><strong>Merci, votre demande a bien été envoyée.</strong></p>
+                  <p>Après une rapide vérification par notre équipe, elle sera transmise à {f.name}, qui vous recontactera directement. Un email de confirmation vous a été adressé.</p>
+                </div>
+              </div>
+            ) : <>
+            {leadErrors.length > 0 && (
+              <div class="lead-errors" role="alert" tabindex="-1" data-lead-errors>
+                <ul>{leadErrors.map((e) => <li>{e}</li>)}</ul>
+              </div>
+            )}
+            <form method="post" action={`/${f.slug}#demande`} class="lead-form" data-lead-form>
+              <label class="field">
+                <span>Votre demande *</span>
+                <select name="lead_type" required>
+                  {Object.entries(REQUEST_TYPES).map(([k, l]) => <option value={k} selected={(lead.request_type ?? 'devis') === k}>{l}</option>)}
+                </select>
+              </label>
+              <label class="field">
+                <span>Délai souhaité</span>
+                <select name="lead_timing">
+                  {Object.entries(TIMINGS).map(([k, l]) => <option value={k} selected={(lead.timing ?? 'mois') === k}>{l}</option>)}
+                </select>
+              </label>
+              <label class="field full">
+                <span>Votre besoin *</span>
+                <textarea name="lead_message" rows="4" required minlength="15" maxlength="2000" placeholder="Décrivez votre projet : nature des travaux ou de la prestation, quantités, contraintes…">{lead.message}</textarea>
+              </label>
+              <label class="field"><span>Nom et prénom *</span><input name="lead_name" required maxlength="80" autocomplete="name" value={lead.name} /></label>
+              <label class="field"><span>Téléphone *</span><input name="lead_phone" type="tel" required maxlength="30" autocomplete="tel" value={lead.phone} placeholder="06 00 00 00 00" /></label>
+              <label class="field"><span>Email *</span><input name="lead_email" type="email" required maxlength="120" autocomplete="email" value={lead.email} /></label>
+              <label class="field"><span>Code postal <small>(facultatif)</small></span><input name="lead_postcode" inputmode="numeric" maxlength="5" pattern="[0-9]{5}" autocomplete="postal-code" value={lead.postcode} /></label>
+              <input type="text" name="lead_hp" tabindex="-1" autocomplete="off" class="hp" aria-hidden="true" />
+              <label class="check full consent">
+                <input type="checkbox" name="lead_consent" required />
+                <span>J'accepte que ma demande et mes coordonnées soient transmises à {f.name} pour être recontacté. {LEADS_PRIVACY} <a href="/confidentialite">En savoir plus</a></span>
+              </label>
+              <div class="full lead-submit"><button class="btn gradient-bg" type="submit">Envoyer ma demande</button></div>
+            </form>
+            </>}
+          </section>
+        )}
+
+        {!f.owner_id && (
+          <section class="claim panel">
+            <div>
+              <h2>Vous êtes le responsable de {f.name} ?</h2>
+              <p class="muted">Revendiquez gratuitement cette fiche pour mettre à jour vos horaires, ajouter votre logo, vos réseaux sociaux et vos services.</p>
+            </div>
+            <a class="btn gradient-bg" href={`/revendiquer/${f.slug}`}>Revendiquer cette fiche</a>
+          </section>
+        )}
+        {isOwner && !f.certified && (
+          <section class="claim panel">
+            <div>
+              <h2>Complétez votre fiche</h2>
+              <p class="muted">Avec la formule Pro ({planLabel(PLANS.pro, 'month')}) : téléphone et email affichés, plan d'accès, présentation détaillée, lien vers votre site, photos, badge certifié et statistiques de contacts. Premium : en tête de liste, vidéos et demandes de devis.</p>
+            </div>
+            <a class="btn gradient-bg" href={`/compte/fiches/${f.id}/abonnement`}>Voir les formules</a>
+          </section>
+        )}
+      </div>
+
+      <aside class="side">
+        <section class="panel" aria-labelledby="t-hours">
+          <h2 id="t-hours"><Icon name="clock" size={18} /> Horaires</h2>
+          {f.hours ? (
+            f.hours.always ? <p class="always">Ouvert 24h/24, 7j/7</p> : (
+              <table class="hours">
+                <tbody>
+                  {DAYS.map((d) => (
+                    <tr class:list={{ today: d === today }}>
+                      <th scope="row">{DAY_LABELS[d]}{d === today && <span class="sr-only"> (aujourd'hui)</span>}</th>
+                      <td class:list={{ closed: !(f.hours![d] ?? []).length }}>{dayText(f.hours![d])}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )
+          ) : <p class="muted">Horaires non renseignés.</p>}
+          {f.hours_note && <p class="note">{f.hours_note}</p>}
+        </section>
+
+        <section class="panel" aria-labelledby="t-contact">
+          <h2 id="t-contact">Coordonnées</h2>
+          <dl class="contact">
+            {address && <><dt><Icon name="pin" size={16} /><span class="sr-only">Adresse</span></dt><dd>{address}</dd></>}
+            {contact && f.phone && <><dt><Icon name="phone" size={16} /><span class="sr-only">Téléphone</span></dt><dd><button type="button" class="reveal" data-reveal="phone" data-track="phone" data-ev="click_phone"><span data-reveal-text>{phoneMasked(f.phone)}</span> <span class="reveal-hint">Afficher</span></button></dd></>}
+            {contact && f.email && <><dt><Icon name="mail" size={16} /><span class="sr-only">Email</span></dt><dd><button type="button" class="reveal" data-reveal="email" data-ev="click_email"><span data-reveal-text>Afficher l'email</span></button></dd></>}
+            {website && <><dt><Icon name="globe" size={16} /><span class="sr-only">Site</span></dt><dd><a href={withUtm(website, 'coordonnees', f.slug)} target="_blank" rel={outRel} data-track="web" data-ev="click_website">{host(website)}</a></dd></>}
+          </dl>
+          {socialLinks.length > 0 && (
+            <>
+              <h3>Réseaux sociaux</h3>
+              <ul class="socials">
+                {socialLinks.map((s) => (
+                  <li><a href={s.url} target="_blank" rel={socialRel} class={`soc soc-${s.key}`} title={s.label} data-ev="click_social" data-ev-network={s.key}><Icon name={s.key} size={18} /><span>{s.label}</span></a></li>
+                ))}
+              </ul>
+            </>
+          )}
+          {f.siret && <p class="legal">SIRET : {f.siret.replace(/(\d{3})(\d{3})(\d{3})(\d{5})/, '$1 $2 $3 $4')}</p>}
+        </section>
+
+        <p class="side-links">
+          <a href={`/signaler/${f.slug}`}><Icon name="flag" size={14} /> Signaler une erreur</a>
+          {f.source === 'osm' && !f.owner_id && (
+            <span class="muted">Données : <a href={`https://www.openstreetmap.org/${f.source_ref}`} target="_blank" rel="noopener">© OpenStreetMap</a></span>
+          )}
+        </p>
+      </aside>
+    </div>
+
+    {related.length > 0 && (
+      <section class="related" aria-labelledby="t-rel">
+        <div class="rh">
+          <h2 id="t-rel">{cat.name} à proximité</h2>
+          <a href={categoryUrl(uni, cat)}>Toutes les fiches →</a>
+        </div>
+        <ul class="cards">{related.map((o) => <li><FicheCard fiche={o} /></li>)}</ul>
+      </section>
+    )}
+  </div>
+</Base>
+
+<script>
+  // Statistiques de contact (appel, site, itinéraire) envoyées sans bloquer la navigation.
+  const ficheId = document.querySelector<HTMLElement>('[data-fiche-id]')?.dataset.ficheId;
+  document.addEventListener('click', (e) => {
+    const a = (e.target as HTMLElement).closest<HTMLElement>('[data-track]');
+    if (a && ficheId) navigator.sendBeacon?.('/api/track', `${ficheId}:${a.dataset.track}`);
+  });
+
+  // Vidéos : le lecteur YouTube (sans cookie de suivi) n'est chargé qu'au clic.
+  document.querySelectorAll<HTMLButtonElement>('[data-video]').forEach((b) => b.addEventListener('click', () => {
+    const f = document.createElement('iframe');
+    f.src = `https://www.youtube-nocookie.com/embed/${b.dataset.video}?autoplay=1&rel=0`;
+    f.title = b.getAttribute('aria-label') ?? 'Vidéo';
+    f.allow = 'accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture; fullscreen';
+    f.allowFullscreen = true;
+    f.className = 'video-frame';
+    b.replaceWith(f);
+  }));
+  document.querySelector<HTMLElement>('[data-lead-errors]')?.focus();
+
+  // Fiche gratuite : le numéro est masqué ; le clic est compté (statistique « personnes ayant voulu appeler »).
+  const lockedBtn = document.querySelector<HTMLButtonElement>('[data-locked-phone]');
+  lockedBtn?.addEventListener('click', () => {
+    const note = document.getElementById('phone-locked');
+    if (note) { note.hidden = false; lockedBtn.setAttribute('aria-expanded', 'true'); }
+  });
+
+  // Téléphone et email (Pro et Premium) : absents du code de la page, demandés au serveur au premier clic.
+  const revealed: Record<string, { text: string; href: string }> = {};
+  for (const b of document.querySelectorAll<HTMLButtonElement>('[data-reveal]')) {
+    b.addEventListener('click', async () => {
+      const kind = b.dataset.reveal!;
+      if (!revealed[kind]) {
+        const res = await fetch('/api/contact', { method: 'POST', body: `${ficheId}:${kind}`, credentials: 'same-origin' }).catch(() => null);
+        if (!res?.ok) {
+          const t = b.querySelector<HTMLElement>('[data-reveal-text]');
+          if (t) t.textContent = res?.status === 429 ? 'Trop de demandes, réessayez plus tard' : 'Indisponible, réessayez';
+          return;
+        }
+        revealed[kind] = await res.json();
+        // Tous les emplacements de la même coordonnée deviennent des liens directs.
+        for (const o of document.querySelectorAll<HTMLButtonElement>(`[data-reveal="${kind}"]`)) {
+          const a = document.createElement('a');
+          a.href = revealed[kind].href;
+          a.className = o.className;
+          if (o.dataset.track) a.dataset.track = o.dataset.track;
+          a.innerHTML = o.innerHTML;
+          a.querySelector('.reveal-hint')?.remove();
+          const t = a.querySelector<HTMLElement>('[data-reveal-text]');
+          if (t) t.textContent = revealed[kind].text;
+          o.replaceWith(a);
+        }
+      }
+      // Sur mobile, l'appel part directement ; l'email ouvre la messagerie.
+      if (kind === 'email' || matchMedia('(hover: none)').matches) location.href = revealed[kind].href;
+    });
+  }
+
+  const btn = document.querySelector<HTMLButtonElement>('[data-share]');
+  const label = btn?.querySelector<HTMLElement>('[data-share-label]');
+  btn?.addEventListener('click', async () => {
+    const url = location.href.split(/[?#]/)[0];
+    try {
+      if (navigator.share && matchMedia('(hover: none)').matches) return void (await navigator.share({ title: btn.dataset.title, url }));
+      await navigator.clipboard.writeText(url);
+      if (label) { label.textContent = 'Lien copié ✓'; setTimeout(() => (label.textContent = 'Partager'), 2000); }
+    } catch {}
+  });
+</script>
+
+<style>
+  .reveal { padding: 0; border: 0; background: none; font: inherit; color: var(--accent); font-weight: 600; cursor: pointer; text-align: left; }
+  .reveal-hint { margin-left: .4rem; padding: .05rem .5rem; border-radius: 999px; background: var(--accent-soft); font-size: .78rem; }
+  .contact a.reveal { padding: 0; }
+  .preview.noidx { background: color-mix(in srgb, var(--cert) 12%, var(--surface)); }
+  .preview.noidx a { color: var(--accent); font-weight: 700; }
+  .preview { margin-top: 1rem; padding: .8rem 1rem; border-radius: 12px; background: color-mix(in srgb, #f59e0b 18%, var(--surface)); display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; }
+  .crumbs-wrap { padding-top: 1.5rem; }
+  .head { margin-top: 1rem; display: flex; gap: 1.5rem; align-items: flex-start; }
+  @media (max-width: 640px) { .head { flex-direction: column; } }
+  .head-txt { flex: 1; min-width: 0; }
+  .has-banner { flex-wrap: wrap; overflow: hidden; }
+  .has-banner .banner { flex: 0 0 calc(100% + 3rem); margin: -1.5rem -1.5rem -.5rem; aspect-ratio: 16 / 5; max-height: 320px; background: var(--surface-2); }
+  .has-banner .banner img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .has-banner > :global(.avatar) { margin-top: -3.5rem; position: relative; border: 4px solid var(--surface); box-shadow: var(--shadow); width: calc(var(--s) + 8px); height: calc(var(--s) + 8px); }
+  @media (max-width: 640px) { .has-banner .banner { aspect-ratio: 16 / 7; } }
+  h1 { margin: 0; font-size: clamp(1.6rem, 4.5vw, 2.3rem); letter-spacing: -0.025em; line-height: 1.15; }
+  .meta { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem 1rem; margin: .6rem 0 0; color: var(--muted); font-size: .92rem; }
+  .meta span { display: inline-flex; align-items: center; gap: .3rem; }
+  .meta .g-chip { display: inline-flex; align-items: center; gap: .3rem; color: var(--text); font-weight: 700; }
+  .meta .g-chip svg { fill: #f59e0b; }
+  .meta .g-chip span { color: var(--muted); font-weight: 400; }
+  .meta .price { padding: .15rem .6rem; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-weight: 700; font-size: .85rem; }
+  .cat { padding: .2rem .75rem; border-radius: 999px; background: var(--surface-2); font-weight: 600; font-size: .84rem; color: var(--text); }
+  .cat:hover { color: var(--accent); }
+  .short { margin: .9rem 0 0; font-size: 1.05rem; }
+  .actions { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: 1.2rem; }
+
+  .layout { display: grid; gap: 1rem; margin-top: 1rem; grid-template-columns: minmax(0, 1fr) 22rem; align-items: start; }
+  @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } .side { order: -1; } }
+  .main, .side { display: grid; gap: 1rem; }
+  .panel h2 { display: flex; align-items: center; gap: .5rem; margin: 0 0 1rem; font-size: 1.15rem; }
+  .panel h3 { margin: 1.5rem 0 .75rem; font-size: 1rem; }
+  .para { margin: 0 0 1rem; white-space: pre-line; }
+  .features { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: .45rem; }
+  .features li { display: inline-flex; align-items: center; gap: .35rem; padding: .35rem .75rem; border-radius: 999px; background: var(--surface-2); font-size: .88rem; font-weight: 500; }
+  .features :global(svg) { color: #16a34a; }
+  .infos { margin: 0; }
+  .infos div { display: flex; flex-wrap: wrap; gap: .2rem .8rem; padding: .55rem 0; border-top: 1px solid var(--line); }
+  .infos div:first-child { border-top: 0; padding-top: 0; }
+  .infos dt { min-width: 12rem; color: var(--muted); font-size: .9rem; }
+  .infos dd { margin: 0; font-weight: 600; }
+  .refs { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; justify-content: center; gap: .75rem; }
+  .refs li { flex: 0 1 9.5rem; display: grid; gap: .45rem; justify-items: center; align-content: center; padding: .9rem .8rem; border: 1px solid var(--line); border-radius: 14px; background: #fff; }
+  .refs img { width: 100%; height: 56px; object-fit: contain; }
+  .refs span { font-size: .8rem; font-weight: 600; color: #444; text-align: center; line-height: 1.3; }
+  @media (max-width: 560px) { .refs li { flex-basis: calc(50% - .375rem); } }
+  .gallery { display: grid; gap: .6rem; grid-template-columns: repeat(auto-fill, minmax(10rem, 1fr)); }
+  .gallery img { width: 100%; aspect-ratio: 4 / 3; object-fit: cover; border-radius: 12px; }
+  .addr { display: flex; gap: .4rem; align-items: center; margin: 0 0 .9rem; font-weight: 500; }
+  .map { position: relative; border-radius: 14px; overflow: hidden; border: 1px solid var(--line); aspect-ratio: 16 / 9; background: var(--surface-2); }
+  .map iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+  .map-links { display: flex; flex-wrap: wrap; justify-content: space-between; gap: .5rem; margin: .75rem 0 0; font-size: .88rem; }
+  .map-links a { color: var(--accent); font-weight: 600; }
+  .claim { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 1rem; border-style: dashed; }
+  .claim h2 { margin-bottom: .3rem; }
+  .claim p { margin: 0; max-width: 34rem; }
+
+  .hours { width: 100%; border-collapse: collapse; font-size: .93rem; }
+  .hours th, .hours td { padding: .45rem .5rem; text-align: left; border-bottom: 1px dashed var(--line); }
+  .hours tr:last-child th, .hours tr:last-child td { border-bottom: 0; }
+  .hours th { font-weight: 500; }
+  .hours td { text-align: right; }
+  .hours .closed { color: var(--muted); }
+  .hours .today { background: var(--accent-soft); font-weight: 700; }
+  .hours .today th, .hours .today td { font-weight: 700; }
+  .hours .today th { border-radius: 8px 0 0 8px; } .hours .today td { border-radius: 0 8px 8px 0; }
+  .always { font-weight: 600; margin: 0; }
+  .note { color: var(--muted); font-size: .85rem; margin: .8rem 0 0; }
+  .contact { display: grid; grid-template-columns: auto 1fr; gap: .7rem .7rem; margin: 0; font-size: .95rem; }
+  .contact dt { color: var(--muted); padding-top: .15rem; }
+  .contact dd { margin: 0; overflow-wrap: anywhere; }
+  .contact a { color: var(--accent); font-weight: 600; }
+  .socials { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .45rem; }
+  .soc { display: flex; width: 100%; box-sizing: border-box; align-items: center; gap: .4rem; padding: .45rem .75rem; border-radius: 10px; border: 1px solid var(--line); font-size: .86rem; font-weight: 600; }
+  .soc:hover { border-color: var(--accent); }
+  .soc-facebook :global(svg) { color: #1877f2; } .soc-instagram :global(svg) { color: #e4405f; } .soc-linkedin :global(svg) { color: #0a66c2; }
+  .soc-youtube :global(svg) { color: #ff0000; } .soc-whatsapp :global(svg) { color: #25d366; } .soc-pinterest :global(svg) { color: #bd081c; }
+  .legal { margin: 1rem 0 0; font-size: .82rem; color: var(--muted); }
+  .side-links { display: flex; flex-direction: column; gap: .4rem; font-size: .85rem; margin: 0; padding: 0 .5rem; }
+  .side-links a { display: inline-flex; align-items: center; gap: .35rem; color: var(--muted); }
+  .side-links a:hover { color: var(--text); }
+  .related { margin-top: 3rem; }
+  .rh { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: .5rem 1rem; margin-bottom: 1rem; }
+  .rh h2 { margin: 0; font-size: 1.25rem; }
+  .rh a { color: var(--accent); font-weight: 600; font-size: .9rem; }
+  .news { display: flex; gap: 1rem; align-items: center; margin-top: 1rem; border-color: color-mix(in srgb, #e11d48 35%, var(--line)); background: color-mix(in srgb, #e11d48 5%, var(--surface)); }
+  @media (max-width: 640px) { .news { flex-direction: column; align-items: flex-start; } }
+  .news-k { flex: none; padding: .3rem .7rem; border-radius: 999px; background: #e11d48; color: #fff; font-size: .75rem; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
+  .news-c { flex: 1; min-width: 0; }
+  .news h2 { margin: 0; font-size: 1.1rem; }
+  .news p { margin: .3rem 0 0; }
+  .news-u { color: var(--muted); font-size: .85rem; }
+  .locked-note { display: flex; gap: .5rem; align-items: flex-start; margin-top: .8rem; padding: .7rem .9rem; border-radius: 10px; background: var(--surface-2); font-size: .9rem; }
+  .locked-note[hidden] { display: none; }
+  .locked-note p { margin: 0; }
+  .locked-note a { color: var(--accent); font-weight: 600; }
+  .devis-btn { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); color: var(--accent); }
+  .videos { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .8rem; }
+  @media (max-width: 700px) { .videos { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  .video { position: relative; display: block; padding: 0; border: 0; border-radius: 12px; overflow: hidden; background: #000; cursor: pointer; aspect-ratio: 16 / 9; }
+  .video img { width: 100%; height: 100%; object-fit: cover; opacity: .9; }
+  .video:hover img { opacity: 1; }
+  .video .play { position: absolute; inset: 0; margin: auto; width: 58px; height: 40px; display: grid; place-items: center; border-radius: 12px; background: #e11d48; color: #fff; }
+  .video .play svg { width: 24px; height: 24px; }
+  :global(.video-frame) { width: 100%; aspect-ratio: 16 / 9; border: 0; border-radius: 12px; }
+  .lead-panel { scroll-margin-top: calc(var(--header-h) + 1rem); border-color: color-mix(in srgb, var(--accent) 35%, var(--line)); }
+  .lead-panel > p { margin: .2rem 0 1rem; }
+  .lead-form { display: grid; grid-template-columns: 1fr 1fr; gap: .9rem 1rem; }
+  .lead-form .full { grid-column: 1 / -1; }
+  @media (max-width: 640px) { .lead-form { grid-template-columns: 1fr; } }
+  .lead-form .consent { align-items: flex-start; gap: .6rem; font-size: .85rem; color: var(--muted); line-height: 1.45; }
+  .lead-form .consent input { margin-top: .2rem; }
+  .lead-form .consent a { color: var(--accent); text-decoration: underline; }
+  .lead-submit { display: flex; justify-content: flex-end; }
+  .lead-ok { display: flex; gap: .8rem; align-items: flex-start; padding: 1rem 1.1rem; border-radius: 12px; background: color-mix(in srgb, #16a34a 12%, var(--surface)); color: #14532d; }
+  .lead-ok p { margin: 0 0 .3rem; }
+  .lead-errors { margin-bottom: 1rem; padding: .7rem 1rem; border-radius: 10px; background: color-mix(in srgb, #dc2626 12%, var(--surface)); color: #991b1b; font-size: .92rem; }
+  .lead-errors ul { margin: 0; padding-left: 1.1rem; }
+  .hp { position: absolute; left: -9999px; width: 1px; height: 1px; opacity: 0; }
+</style>

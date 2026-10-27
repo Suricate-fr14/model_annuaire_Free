@@ -1,0 +1,18 @@
+---
+import Legal from '../layouts/Legal.astro';
+import { SITE, PLANS, planLabel } from '../config';
+---
+<Legal title="Conditions générales d'utilisation" draft>
+  <h2>1. Objet</h2>
+  <p>L'{SITE.fullName}, édité par {SITE.parent.name}, est un annuaire en ligne d'entreprises et de commerces. Les présentes conditions encadrent l'utilisation du site et la création de fiches.</p>
+  <h2>2. Compte</h2>
+  <p>La création d'un compte est gratuite. Vous êtes responsable de la confidentialité de votre mot de passe et des informations publiées depuis votre compte.</p>
+  <h2>3. Contenu des fiches</h2>
+  <p>Vous vous engagez à publier des informations exactes, à jour, et dont vous détenez les droits (textes, logos, photos). Toute fiche peut être modérée, refusée ou dépubliée si elle est trompeuse, illicite, en doublon ou sans rapport avec une activité réelle.</p>
+  <h2>4. Revendication</h2>
+  <p>La revendication d'une fiche existante est soumise à vérification. Vous certifiez être habilité à représenter l'établissement concerné.</p>
+  <h2>5. Formules Pro et Premium</h2>
+  <p>Les formules Pro ({planLabel(PLANS.pro, 'month')} ou {planLabel(PLANS.pro, 'year')}) et Premium ({planLabel(PLANS.premium, 'month')} ou {planLabel(PLANS.premium, 'year')}) sont des abonnements sans engagement, renouvelés automatiquement à chaque période et résiliables à tout moment depuis votre espace. La résiliation prend effet à la fin de la période payée. Un changement de formule est appliqué au prorata. Le paiement est traité par Stripe. Prix hors taxes, TVA en sus.</p>
+  <h2>6. Responsabilité</h2>
+  <p>Les informations sont fournies à titre indicatif ; vérifiez auprès de l'établissement avant tout déplacement.</p>
+</Legal>

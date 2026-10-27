@@ -1,0 +1,147 @@
+---
+// Barre de recherche : envoie vers /recherche, avec suggestions instantanées (fetch /api/suggest).
+import { universes } from '../lib/taxonomy';
+import { stats } from '../lib/fiches';
+
+interface Props { q?: string; universe?: string; city?: string; open?: boolean; compact?: boolean }
+const { q = '', universe = '', city = '', open = false, compact = false } = Astro.props;
+const cities = stats().cities.slice(0, 40);
+---
+<form class:list={['sb', { compact }]} action="/recherche" method="get" role="search">
+  <div class="main">
+    <label class="q">
+      <span class="sr-only">Que recherchez-vous ?</span>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg>
+      <input type="search" name="q" value={q} placeholder="Boulangerie, plombier, nom d'une entreprise…" autocomplete="off" enterkeyhint="search" data-suggest-input aria-autocomplete="list" aria-controls="sb-suggest" />
+      <kbd class="kbd" aria-hidden="true">/</kbd>
+    </label>
+    <label class="where">
+      <span class="sr-only">Où ?</span>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 10c0 6-8 12-8 12S4 16 4 10a8 8 0 0 1 16 0z"></path><circle cx="12" cy="10" r="3"></circle></svg>
+      <select name="ville">
+        <option value="">Toutes les villes</option>
+        {cities.map((c) => <option value={c.city_slug} selected={c.city_slug === city}>{c.city} ({c.n})</option>)}
+      </select>
+    </label>
+    <button class="btn gradient-bg go" type="submit">Rechercher</button>
+  </div>
+  {!compact && (
+    <div class="opts">
+      <label class="field-inline">
+        <span class="sr-only">Univers</span>
+        <select name="univers" class="mini">
+          <option value="">Tous les univers</option>
+          {universes.map((u) => <option value={u.slug} selected={u.slug === universe}>{u.name}</option>)}
+        </select>
+      </label>
+      <label class="check"><input type="checkbox" name="ouvert" value="1" checked={open} /> Ouvert maintenant</label>
+    </div>
+  )}
+  <ul id="sb-suggest" class="suggest" role="listbox" hidden data-suggest-list></ul>
+</form>
+
+<script>
+  for (const form of document.querySelectorAll<HTMLFormElement>('form.sb')) {
+    const input = form.querySelector<HTMLInputElement>('[data-suggest-input]')!;
+    const list = form.querySelector<HTMLUListElement>('[data-suggest-list]')!;
+    let timer: number | undefined;
+    let active = -1;
+    let ctrl: AbortController | null = null;
+
+    const close = () => { list.hidden = true; active = -1; };
+    const highlight = () => {
+      [...list.children].forEach((li, i) => li.classList.toggle('on', i === active));
+    };
+
+    input.addEventListener('input', () => {
+      clearTimeout(timer);
+      const q = input.value.trim();
+      if (q.length < 2) return close();
+      timer = window.setTimeout(async () => {
+        ctrl?.abort();
+        ctrl = new AbortController();
+        try {
+          const res = await fetch(`/api/suggest?q=${encodeURIComponent(q)}`, { signal: ctrl.signal });
+          const items: { name: string; slug: string; category: string; city: string }[] = await res.json();
+          list.replaceChildren(...items.map((it) => {
+            const li = document.createElement('li');
+            li.setAttribute('role', 'option');
+            const a = document.createElement('a');
+            a.href = `/${it.slug}`;
+            const strong = document.createElement('strong');
+            strong.textContent = it.name;
+            const small = document.createElement('small');
+            small.textContent = `${it.category} · ${it.city}`;
+            a.append(strong, small);
+            li.append(a);
+            return li;
+          }));
+          const all = document.createElement('li');
+          all.className = 'all';
+          const a = document.createElement('button');
+          a.type = 'submit';
+          a.textContent = `Voir tous les résultats pour « ${q} »`;
+          all.append(a);
+          list.append(all);
+          list.hidden = false;
+          active = -1;
+        } catch {}
+      }, 160);
+    });
+    input.addEventListener('keydown', (e) => {
+      if (list.hidden) return;
+      const n = list.children.length;
+      if (e.key === 'ArrowDown') { e.preventDefault(); active = (active + 1) % n; highlight(); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); active = (active - 1 + n) % n; highlight(); }
+      else if (e.key === 'Enter' && active >= 0) {
+        e.preventDefault();
+        (list.children[active].querySelector('a, button') as HTMLElement).click();
+      } else if (e.key === 'Escape') close();
+    });
+    document.addEventListener('click', (e) => { if (!form.contains(e.target as Node)) close(); });
+  }
+
+  addEventListener('keydown', (e) => {
+    const t = e.target as HTMLElement;
+    if (e.key === '/' && !/INPUT|TEXTAREA|SELECT/.test(t.tagName) && !t.isContentEditable) {
+      const input = document.querySelector<HTMLInputElement>('[data-suggest-input]');
+      if (input) { e.preventDefault(); input.focus(); input.select(); }
+    }
+  });
+</script>
+
+<style>
+  .sb { position: relative; }
+  .main {
+    display: flex; flex-wrap: wrap; gap: .5rem; padding: .5rem;
+    border: 1px solid var(--line); border-radius: 18px; background: var(--surface); box-shadow: var(--shadow);
+  }
+  .main:focus-within { border-color: var(--accent); box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 16%, transparent); }
+  .q, .where { display: flex; align-items: center; gap: .55rem; padding: .35rem .7rem; min-width: 0; }
+  .q { flex: 3 1 16rem; }
+  .where { flex: 1 1 11rem; border-left: 1px solid var(--line); }
+  @media (max-width: 640px) { .where { border-left: 0; border-top: 1px solid var(--line); } }
+  .q svg, .where svg { width: 19px; height: 19px; color: var(--muted); flex: none; }
+  .q input, .where select { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: inherit; font: inherit; font-size: 1.02rem; }
+  .where select { cursor: pointer; }
+  .q input::placeholder { color: var(--muted); opacity: .85; }
+  .kbd { font: 600 .72rem/1 ui-monospace, monospace; color: var(--muted); padding: .3rem .45rem; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-2); }
+  .q:focus-within .kbd { display: none; }
+  @media (hover: none) { .kbd { display: none; } }
+  .go { flex: 0 0 auto; padding: .75rem 1.3rem; border-radius: 13px; }
+  @media (max-width: 640px) { .go { flex: 1 1 100%; } }
+  .opts { display: flex; flex-wrap: wrap; align-items: center; gap: .75rem 1.25rem; margin-top: .8rem; }
+  .mini { padding: .45rem .8rem; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: inherit; font: inherit; font-size: .9rem; }
+  .suggest {
+    position: absolute; left: 0; right: 0; top: calc(100% + 6px); z-index: 15; list-style: none; margin: 0; padding: .35rem;
+    border: 1px solid var(--line); border-radius: 14px; background: var(--surface); box-shadow: 0 20px 40px -16px rgba(0, 0, 0, .35);
+  }
+  .compact .suggest { top: calc(100% - 4px); }
+  .suggest :global(li a), .suggest :global(li button) {
+    display: flex; flex-direction: column; width: 100%; padding: .55rem .75rem; border-radius: 10px; text-align: left;
+    border: 0; background: none; cursor: pointer; font: inherit;
+  }
+  .suggest :global(li small) { color: var(--muted); font-size: .8rem; }
+  .suggest :global(li.on a), .suggest :global(li a:hover), .suggest :global(li button:hover), .suggest :global(li.on button) { background: var(--surface-2); }
+  .suggest :global(li.all button) { color: var(--accent); font-weight: 600; font-size: .9rem; }
+</style>

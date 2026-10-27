@@ -1,0 +1,29 @@
+---
+import Admin from '../../../layouts/Admin.astro';
+import FicheForm from '../../../components/FicheForm.astro';
+import { parseFicheForm } from '../../../lib/ficheForm';
+import { createFiche, setIndexMode } from '../../../lib/fiches';
+import { PLANS } from '../../../config';
+import { flash } from '../../../lib/flash';
+import { audit } from '../../../lib/db';
+
+let errors: string[] = [];
+let values: any = {};
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const { data, errors: errs } = await parseFicheForm(form, { pro: true, premium: true, maxPhotos: PLANS.premium.photos });
+  errors = errs;
+  values = data;
+  if (!errors.length) {
+    const { id } = createFiche(data, { ownerId: null, status: 'published', source: 'admin' });
+    setIndexMode(id, String(form.get('index_mode') ?? 'auto'));
+    audit(Astro.locals.user!.id, 'admin.fiche.create', String(id));
+    flash(Astro.cookies, 'ok', 'Fiche créée et publiée.');
+    return Astro.redirect(`/admin/fiches/${id}`);
+  }
+}
+---
+<Admin title="Nouvelle fiche">
+  <p class="muted">La fiche est publiée immédiatement, sans propriétaire (elle pourra être revendiquée).</p>
+  <FicheForm values={values} pro={true} premium={true} maxPhotos={PLANS.premium.photos} errors={errors} submitLabel="Créer et publier" isNew={Astro.request.method !== 'POST'} admin />
+</Admin>

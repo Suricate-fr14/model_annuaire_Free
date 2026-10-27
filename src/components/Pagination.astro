@@ -1,0 +1,37 @@
+---
+interface Props { page: number; total: number; perPage: number; url: URL }
+const { page, total, perPage, url } = Astro.props;
+const pages = Math.max(1, Math.ceil(total / perPage));
+const href = (p: number) => {
+  const u = new URL(url);
+  if (p <= 1) u.searchParams.delete('page');
+  else u.searchParams.set('page', String(p));
+  return u.pathname + u.search;
+};
+const nums = [...new Set([1, page - 2, page - 1, page, page + 1, page + 2, pages])].filter((n) => n >= 1 && n <= pages).sort((a, b) => a - b);
+---
+{pages > 1 && (
+  <nav class="pager" aria-label="Pagination">
+    {page > 1 ? <a href={href(page - 1)} rel="prev">← Précédent</a> : <span class="off">← Précédent</span>}
+    <span class="nums">
+      {nums.map((n, i) => (
+        <>
+          {i > 0 && n - nums[i - 1] > 1 && <span class="gap">…</span>}
+          {n === page ? <span class="cur" aria-current="page">{n}</span> : <a href={href(n)}>{n}</a>}
+        </>
+      ))}
+    </span>
+    {page < pages ? <a href={href(page + 1)} rel="next">Suivant →</a> : <span class="off">Suivant →</span>}
+  </nav>
+)}
+
+<style>
+  .pager { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .75rem; margin-top: 1.5rem; }
+  .nums { display: flex; gap: .3rem; flex-wrap: wrap; }
+  a, .cur, .off, .gap { display: inline-grid; place-items: center; min-width: 2.3rem; height: 2.3rem; padding: 0 .7rem; border-radius: 10px; font-weight: 600; font-size: .9rem; }
+  a { background: var(--surface); border: 1px solid var(--line); }
+  a:hover { border-color: var(--accent); }
+  .cur { background: var(--accent); color: #fff; }
+  .off { color: var(--muted); opacity: .5; }
+  .gap { min-width: auto; padding: 0 .2rem; color: var(--muted); }
+</style>

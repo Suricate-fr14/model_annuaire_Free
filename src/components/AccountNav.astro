@@ -1,0 +1,23 @@
+---
+const path = Astro.url.pathname;
+const items = [
+  { href: '/compte', label: 'Mes fiches' },
+  { href: '/compte/fiches/nouvelle', label: 'Nouvelle fiche' },
+  { href: '/compte/demandes', label: 'Demandes' },
+  { href: '/compte/factures', label: 'Factures' },
+  { href: '/compte/parametres', label: 'Paramètres' },
+];
+---
+<nav class="acc-nav" aria-label="Espace professionnel">
+  {items.map((i) => <a href={i.href} aria-current={path === i.href ? 'page' : undefined}>{i.label}</a>)}
+  <form method="post" action="/deconnexion"><button type="submit">Se déconnecter</button></form>
+</nav>
+
+<style>
+  .acc-nav { display: flex; flex-wrap: wrap; align-items: center; gap: .35rem; padding: .4rem; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); }
+  .acc-nav a, .acc-nav button { padding: .5rem .9rem; border-radius: 10px; font-weight: 600; font-size: .9rem; border: 0; background: none; cursor: pointer; font-family: inherit; color: inherit; }
+  .acc-nav a:hover, .acc-nav button:hover { background: var(--surface-2); }
+  .acc-nav a[aria-current] { background: var(--text); color: var(--bg); }
+  .acc-nav form { margin-left: auto; }
+  .acc-nav button { color: var(--muted); }
+</style>

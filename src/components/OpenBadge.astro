@@ -1,0 +1,40 @@
+---
+// État « ouvert / fermé » : calculé au rendu, puis recalculé dans le navigateur (heure réelle du visiteur, page en cache).
+import { openState, type Hours } from '../lib/hours';
+import { SITE } from '../config';
+
+interface Props { hours: Hours | null; size?: 'sm' | 'md' }
+const { hours, size = 'sm' } = Astro.props;
+const st = openState(hours, SITE.timezone);
+---
+{st && (
+  <span class:list={['open-badge', size, st.open ? (st.soon ? 'soon' : 'is-open') : 'is-closed']} data-hours={JSON.stringify(hours)}>
+    <span class="dot-state" aria-hidden="true"></span>
+    <span data-open-label>{st.label}</span>
+  </span>
+)}
+
+<script>
+  import { openState } from '../lib/hours';
+  const refresh = () => {
+    for (const el of document.querySelectorAll<HTMLElement>('.open-badge[data-hours]')) {
+      const st = openState(JSON.parse(el.dataset.hours!));
+      if (!st) continue;
+      el.classList.remove('is-open', 'is-closed', 'soon');
+      el.classList.add(st.open ? (st.soon ? 'soon' : 'is-open') : 'is-closed');
+      el.querySelector('[data-open-label]')!.textContent = st.label;
+    }
+  };
+  refresh();
+  setInterval(refresh, 60_000);
+</script>
+
+<style>
+  .open-badge { display: inline-flex; align-items: center; gap: .4rem; font-weight: 600; white-space: nowrap; }
+  .open-badge.sm { font-size: .8rem; }
+  .open-badge.md { font-size: .95rem; }
+  .dot-state { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .is-open { color: #15803d; } .is-open .dot-state { background: #16a34a; box-shadow: 0 0 0 3px color-mix(in srgb, #16a34a 25%, transparent); }
+  .soon { color: #b45309; } .soon .dot-state { background: #f59e0b; }
+  .is-closed { color: #b91c1c; } .is-closed .dot-state { background: #dc2626; }
+</style>

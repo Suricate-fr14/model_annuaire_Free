@@ -1,0 +1,85 @@
+---
+import Admin from '../../layouts/Admin.astro';
+import Pagination from '../../components/Pagination.astro';
+import { all, get, run, audit } from '../../lib/db';
+import { revokeSessions } from '../../lib/auth';
+import { flash } from '../../lib/flash';
+
+const me = Astro.locals.user!;
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const id = Number(form.get('id'));
+  const action = String(form.get('_action'));
+  const admins = get<{ n: number }>("SELECT COUNT(*) n FROM users WHERE role = 'admin' AND disabled = 0")!.n;
+  const target = get<{ role: string; email: string }>('SELECT role, email FROM users WHERE id = ?', id);
+  if (!target) return Astro.redirect('/admin/utilisateurs');
+  if (id === me.id && action !== 'promote') {
+    flash(Astro.cookies, 'error', 'Vous ne pouvez pas modifier votre propre compte ici.');
+  } else if (target.role === 'admin' && admins <= 1 && ['demote', 'disable', 'delete'].includes(action)) {
+    flash(Astro.cookies, 'error', 'Il doit rester au moins un administrateur actif.');
+  } else {
+    if (action === 'promote') run("UPDATE users SET role = 'admin' WHERE id = ?", id);
+    if (action === 'demote') run("UPDATE users SET role = 'user' WHERE id = ?", id);
+    if (action === 'disable') { run('UPDATE users SET disabled = 1 WHERE id = ?', id); revokeSessions(id); }
+    if (action === 'enable') run('UPDATE users SET disabled = 0 WHERE id = ?', id);
+    if (action === 'delete') {
+      run("UPDATE fiches SET owner_id = NULL WHERE owner_id = ? AND source <> 'user'", id);
+      run("UPDATE fiches SET status = 'unpublished', owner_id = NULL WHERE owner_id = ?", id);
+      run('DELETE FROM users WHERE id = ?', id);
+    }
+    audit(me.id, `user.${action}`, target.email);
+    flash(Astro.cookies, 'ok', `Action « ${action} » appliquée à ${target.email}.`);
+  }
+  return Astro.redirect('/admin/utilisateurs' + Astro.url.search);
+}
+
+const q = Astro.url.searchParams.get('q') ?? '';
+const page = Math.max(1, Number(Astro.url.searchParams.get('page')) || 1);
+const per = 50;
+const like = `%${q}%`;
+const total = get<{ n: number }>('SELECT COUNT(*) n FROM users WHERE email LIKE ? OR name LIKE ?', like, like)!.n;
+const users = all<any>(`SELECT u.*, (SELECT COUNT(*) FROM fiches f WHERE f.owner_id = u.id) AS fiches FROM users u
+  WHERE email LIKE ? OR name LIKE ? ORDER BY u.created_at DESC LIMIT ? OFFSET ?`, like, like, per, (page - 1) * per);
+---
+<Admin title="Utilisateurs">
+  <form class="toolbar" method="get">
+    <input class="input" type="search" name="q" value={q} placeholder="Nom ou email" />
+    <button class="btn btn-ghost" type="submit">Rechercher</button>
+  </form>
+  <p class="muted">{total} comptes</p>
+  <div class="table-wrap">
+    <table class="table">
+      <thead><tr><th>Utilisateur</th><th>Rôle</th><th>Fiches</th><th>Inscrit</th><th>Dernière connexion</th><th>Actions</th></tr></thead>
+      <tbody>
+        {users.map((u) => (
+          <tr>
+            <td><strong>{u.name || '—'}</strong><br /><a href={`mailto:${u.email}`}>{u.email}</a></td>
+            <td>{u.role === 'admin' ? <span class="badge badge-pro">Admin</span> : <span class="badge">Pro / particulier</span>}{u.disabled ? <span class="badge badge-err">Désactivé</span> : null}</td>
+            <td>{u.fiches > 0 ? <a href={`/admin/fiches?q=${encodeURIComponent(u.email)}`}>{u.fiches}</a> : 0}</td>
+            <td><small>{u.created_at.slice(0, 10)}</small></td>
+            <td><small>{u.last_login_at?.slice(0, 16) ?? '—'}</small></td>
+            <td>
+              {u.id !== me.id && (
+                <form method="post" class="acts">
+                  <input type="hidden" name="id" value={u.id} />
+                  {u.role === 'admin'
+                    ? <button class="btn btn-ghost btn-sm" name="_action" value="demote">Retirer admin</button>
+                    : <button class="btn btn-ghost btn-sm" name="_action" value="promote" data-confirm={`Donner les droits d'administration à ${u.email} ?`}>Rendre admin</button>}
+                  {u.disabled
+                    ? <button class="btn btn-ghost btn-sm" name="_action" value="enable">Réactiver</button>
+                    : <button class="btn btn-ghost btn-sm" name="_action" value="disable">Désactiver</button>}
+                  <button class="btn btn-danger btn-sm" name="_action" value="delete" data-confirm={`Supprimer le compte ${u.email} ? Ses fiches créées seront dépubliées.`}>Supprimer</button>
+                </form>
+              )}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  </div>
+  <Pagination page={page} total={total} perPage={per} url={Astro.url} />
+</Admin>
+
+<style>
+  .acts { display: flex; flex-wrap: wrap; gap: .3rem; }
+</style>

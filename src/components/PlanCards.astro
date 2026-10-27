@@ -1,0 +1,142 @@
+---
+// Cartes des formules (Gratuite / Pro / Premium) avec bascule mensuel ↔ annuel.
+// mode « public » : liens d'inscription. mode « account » : formulaires de souscription pour une fiche.
+import Icon from './Icon.astro';
+import { PLANS, euro, annualSaving, annualOfferLabel, type PlanKey, type Interval } from '../config';
+import { activePromos } from '../lib/promos';
+
+interface Props {
+  mode: 'public' | 'account';
+  current?: PlanKey | '';
+  canSubscribe?: boolean;
+  showFree?: boolean;
+  /** Page vers laquelle mènent les boutons en mode public (la formule et la périodicité y sont ajoutées). */
+  publicHref?: string;
+  /** Formule et périodicité présélectionnées (venant de la page Tarifs). */
+  selected?: PlanKey | '';
+  interval?: Interval;
+}
+const { mode, current = '', canSubscribe = true, showFree = mode === 'public', publicHref = '/creer-ma-fiche', selected = '', interval = 'year' } = Astro.props;
+const link = (k: PlanKey) => `${publicHref}${publicHref.includes('?') ? '&' : '?'}formule=${k}&periode=${interval}`;
+const free = ['Visible dans l’annuaire (non référencée sur Google)', 'Nom, catégorie et adresse', 'Lien itinéraire', "Horaires et « ouvert maintenant »", 'Réseaux sociaux et services', 'Logo et description courte'];
+const plans = [PLANS.pro, PLANS.premium];
+---
+<div class="plans-wrap" data-plans data-interval={interval}>
+  <div class="toggle" role="group" aria-label="Périodicité">
+    <button type="button" data-set="month" aria-pressed={String(interval === 'month')}>Mensuel</button>
+    <button type="button" data-set="year" aria-pressed={String(interval === 'year')}>Annuel {annualOfferLabel() && <span class="save">{annualOfferLabel()}</span>}</button>
+  </div>
+
+  <div class:list={['plans', { three: showFree }]}>
+    {showFree && (
+      <section class="plan">
+        <h3>Gratuite</h3>
+        <p class="tag">Pour exister dans l'annuaire</p>
+        <p class="price"><strong>0 €</strong></p>
+        <p class="sub">Sans limite de durée</p>
+        <ul>{free.map((p) => <li><Icon name="check" size={16} /> {p}</li>)}</ul>
+        <a class="btn btn-ghost" href="/creer-ma-fiche">Créer ma fiche</a>
+      </section>
+    )}
+    {plans.map((p) => (
+      <section class:list={['plan', p.key, { current: current === p.key, chosen: selected === p.key && current !== p.key }]}>
+        {p.key === 'premium' && selected !== 'premium' && <span class="ribbon">Visibilité maximale</span>}
+        {selected === p.key && current !== p.key && <span class="ribbon pick">Votre choix</span>}
+        {current === p.key && <span class="ribbon cur">Votre formule</span>}
+        <h3>{p.name}</h3>
+        {activePromos(p.key).filter((x) => x.percent).slice(0, 1).map((x) => <p class="promo-tag">-{x.percent} % avec le code <strong>{x.code}</strong></p>)}
+        <p class="tag">{p.tagline}</p>
+        <p class="price">
+          <strong class="m">{euro(p.month)}</strong><strong class="y">{euro(Math.round((p.year / 12) * 100) / 100)}</strong>
+          <span> HT / mois</span>
+        </p>
+        <p class="sub"><span class="m">Sans engagement, résiliable à tout moment</span><span class="y">Soit {euro(p.year)} HT facturés par an{annualSaving(p) > 0 && `, ${euro(annualSaving(p))} d'économie`}</span></p>
+        <ul>{p.perks.map((perk, i) => <li class:list={{ lead: i === 0 && p.key === 'premium' }}><Icon name={p.key === 'premium' ? 'star' : 'check'} size={16} /> {perk}</li>)}</ul>
+        {mode === 'public' ? (
+          <a class:list={['btn', p.key === 'premium' ? 'gradient-bg' : 'btn-ghost']} href={link(p.key)} data-intent-link data-ev="select_plan" data-ev-plan={p.key}>Choisir {p.name}</a>
+        ) : current === p.key ? (
+          <span class="btn btn-ghost" aria-disabled="true">Formule actuelle</span>
+        ) : (
+          <form method="post" data-checkout={p.key} data-name={p.name} data-month={p.month} data-year={p.year}>
+            <input type="hidden" name="_action" value="subscribe" />
+            <input type="hidden" name="plan" value={p.key} />
+            <input type="hidden" name="interval" value={interval} data-interval-input />
+            <button class:list={['btn', p.key === 'premium' || selected === p.key ? 'gradient-bg' : 'btn-ghost']} type="submit" disabled={!canSubscribe}>
+              {current ? `Passer en ${p.name}` : `Souscrire ${p.name}`}
+            </button>
+          </form>
+        )}
+      </section>
+    ))}
+  </div>
+</div>
+
+<script>
+  for (const root of document.querySelectorAll<HTMLElement>('[data-plans]')) {
+    const set = (v: string) => {
+      root.dataset.interval = v;
+      root.querySelectorAll<HTMLButtonElement>('[data-set]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.set === v)));
+      root.querySelectorAll<HTMLInputElement>('[data-interval-input]').forEach((i) => (i.value = v));
+      root.querySelectorAll<HTMLAnchorElement>('[data-intent-link]').forEach((a) => {
+        const u = new URL(a.href);
+        u.searchParams.set('periode', v);
+        a.href = u.pathname + u.search;
+      });
+    };
+    root.querySelectorAll<HTMLButtonElement>('[data-set]').forEach((b) => b.addEventListener('click', () => set(b.dataset.set!)));
+  }
+
+  // Google Tag Manager : début de souscription (begin_checkout, montants HT) avant la redirection vers Stripe.
+  document.addEventListener('submit', (e) => {
+    const form = (e.target as HTMLElement).closest<HTMLFormElement>('form[data-checkout]');
+    const dl = (window as any).dataLayer as unknown[] | undefined;
+    if (!form || !dl) return;
+    const interval = new FormData(form).get('interval') === 'month' ? 'month' : 'year';
+    const price = Number(interval === 'month' ? form.dataset.month : form.dataset.year);
+    dl.push({ ecommerce: null });
+    dl.push({
+      event: 'begin_checkout', plan: form.dataset.checkout, plan_interval: interval,
+      ecommerce: { currency: 'EUR', value: price, items: [{
+        item_id: `${form.dataset.checkout}_${interval}`, item_name: `Formule ${form.dataset.name} ${interval === 'month' ? 'mensuelle' : 'annuelle'}`,
+        item_category: 'abonnement', price, quantity: 1,
+      }] },
+    });
+  });
+</script>
+
+<style>
+  .toggle { display: inline-flex; gap: .25rem; padding: .3rem; margin: 0 auto 1.25rem; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); }
+  .plans-wrap { display: flex; flex-direction: column; }
+  .toggle button { display: inline-flex; align-items: center; gap: .45rem; padding: .5rem 1.1rem; border: 0; border-radius: 999px; background: none; font: inherit; font-weight: 600; font-size: .92rem; cursor: pointer; color: var(--muted); }
+  .toggle button[aria-pressed='true'] { background: var(--text); color: var(--bg); }
+  .save { padding: .1rem .5rem; border-radius: 999px; background: #16a34a; color: #fff; font-size: .72rem; }
+  .plans { display: grid; gap: 1rem; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: stretch; }
+  .plans.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  @media (max-width: 900px) { .plans, .plans.three { grid-template-columns: 1fr; } }
+  .plan {
+    position: relative; display: flex; flex-direction: column; gap: .35rem; padding: 1.6rem 1.4rem;
+    border: 1px solid var(--line); border-radius: 20px; background: var(--surface); box-shadow: var(--shadow);
+  }
+  .plan.pro { border-color: color-mix(in srgb, var(--cert) 45%, var(--line)); }
+  .plan.premium { border: 2px solid var(--accent); background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 6%, var(--surface)), var(--surface) 40%); }
+  .plan.current { outline: 3px solid color-mix(in srgb, #16a34a 50%, transparent); }
+  .ribbon { position: absolute; top: -.75rem; left: 1.4rem; padding: .25rem .75rem; border-radius: 999px; background: var(--accent); color: #fff; font-size: .75rem; font-weight: 700; }
+  .ribbon.cur { left: auto; right: 1.4rem; background: #16a34a; }
+  .ribbon.pick { background: #f59e0b; }
+  .plan.chosen { outline: 3px solid color-mix(in srgb, #f59e0b 60%, transparent); }
+  h3 { margin: 0; font-size: 1.35rem; }
+  .tag { margin: 0; color: var(--muted); font-size: .92rem; }
+  .price { margin: .8rem 0 0; }
+  .price strong { font-size: 2.3rem; font-weight: 800; letter-spacing: -0.03em; }
+  .price span { color: var(--muted); font-weight: 600; }
+  .sub { margin: 0; color: var(--muted); font-size: .84rem; min-height: 1.3em; }
+  [data-interval='month'] .y, [data-interval='year'] .m { display: none; }
+  ul { list-style: none; margin: 1rem 0 1.25rem; padding: 0; display: grid; gap: .55rem; flex: 1; align-content: start; }
+  li { display: flex; gap: .5rem; align-items: flex-start; font-size: .94rem; }
+  li :global(svg) { flex: none; margin-top: .2rem; color: #16a34a; }
+  .premium li :global(svg) { color: var(--accent); }
+  li.lead { font-weight: 700; }
+  .plan form, .plan .btn { width: 100%; }
+  .plan form .btn { width: 100%; }
+  .promo-tag { margin: .2rem 0 0; display: inline-block; width: fit-content; align-self: flex-start; justify-self: start; padding: .15rem .55rem; border-radius: 999px; background: #e11d48; color: #fff; font-size: .78rem; font-weight: 600; }
+</style>

@@ -1,0 +1,119 @@
+---
+import Base from '../../layouts/Base.astro';
+import SearchBar from '../../components/SearchBar.astro';
+import FicheCard from '../../components/FicheCard.astro';
+import CategoryChips from '../../components/CategoryChips.astro';
+import { SITE, CITY } from '../../config';
+import { universeOfDay, stats, universeCounts } from '../../lib/fiches';
+import { universeUrl } from '../../lib/taxonomy';
+import { collectionGraph } from '../../lib/schema';
+import { all } from '../../lib/db';
+
+const s = stats();
+// Sommaire complet de l'annuaire : toutes les catégories par univers, toutes les communes, index A à Z.
+// (La vitrine, avec fiches du jour et nouveaux inscrits, est la page d'accueil.)
+const uday = universeOfDay();
+const unis = universeCounts().filter((u) => u.count > 0).sort((a, b) => b.count - a.count);
+const fr = (n: number) => n.toLocaleString('fr-FR');
+const letters = new Map(all<{ l: string; n: number }>(
+  "SELECT substr(search, 1, 1) AS l, COUNT(*) AS n FROM fiches WHERE status = 'published' GROUP BY l",
+).map((r) => [/[a-z]/.test(r.l) ? r.l.toUpperCase() : '#', r.n]));
+const LETTERS = [...'ABCDEFGHIJKLMNOPQRSTUVWXYZ', '#'];
+const jsonLd = collectionGraph({
+  path: '/annuaire', name: `Annuaire des entreprises de ${SITE.region}`, description: SITE.description,
+  items: universeCounts().filter((u) => u.count > 0).map((u) => ({ name: u.name, url: universeUrl(u) })),
+});
+---
+<Base title={`Annuaire des entreprises de ${SITE.region} : catégories, villes, A à Z | ${SITE.fullName}`} description={`L'${SITE.fullName} en un clin d'œil : ${fr(s.total)} entreprises et commerces ${CITY.of} et alentour classés par catégorie, par commune et de A à Z.`} jsonLd={jsonLd}>
+  <div class="wrap">
+    <header class="hero">
+      <h1>Tous les pros {CITY.of}, <span class="grad">en un clin d'œil</span><span class="dot">.</span></h1>
+      <p class="lede">Toutes les catégories, toutes les communes et toutes les fiches de A à Z : {fr(s.total)} entreprises, commerces et professionnels à {CITY.area}, dont {fr(s.certified)} {s.certified > 1 ? 'fiches certifiées' : 'fiche certifiée'}.</p>
+      <div class="search"><SearchBar /></div>
+    </header>
+
+    {uday && (
+      <section class="section" aria-labelledby="t-uday">
+        <div class="sh">
+          <h2 id="t-uday">Univers du jour : {uday.universe.name}</h2>
+          <a href={universeUrl(uday.universe)}>Voir les {uday.universe.count.toLocaleString('fr-FR')} fiches →</a>
+        </div>
+        <ul class="cards">{uday.items.map((f) => <li><FicheCard fiche={f} /></li>)}</ul>
+      </section>
+    )}
+
+    <section class="section" aria-labelledby="t-cats">
+      <div class="sh"><h2 id="t-cats">Toutes les catégories</h2><a href="/univers">Vue par univers →</a></div>
+      <nav class="jump" aria-label="Aller à un univers">
+        {unis.map((u) => <a href={`#u-${u.slug}`} style={`--h:${u.hue}`}><span class="d" aria-hidden="true"></span>{u.name}</a>)}
+      </nav>
+      {unis.map((u) => (
+        <section class="uni" id={`u-${u.slug}`} style={`--h:${u.hue}`} aria-labelledby={`g-${u.slug}`}>
+          <a class="uhead" href={universeUrl(u)}>
+            <span class="mark" aria-hidden="true">{u.name.charAt(0)}</span>
+            <span class="ut">
+              <h3 id={`g-${u.slug}`}>{u.name}</h3>
+              <span>{fr(u.count)} {u.count > 1 ? 'fiches' : 'fiche'} · {((n) => `${n} ${n > 1 ? 'catégories' : 'catégorie'}`)(u.categories.filter((c) => c.count > 0).length)}</span>
+            </span>
+            <span class="go">Voir l'univers →</span>
+          </a>
+          <CategoryChips universe={u} categories={u.categories} />
+        </section>
+      ))}
+    </section>
+
+    <section class="section panel" aria-labelledby="t-az">
+      <h2 id="t-az">Toutes les fiches de A à Z</h2>
+      <nav class="letters" aria-label="Lettres">
+        {LETTERS.map((l) => letters.get(l) ? (
+          <a href={`/annuaire/${l === '#' ? 'autres' : l.toLowerCase()}`}>{l}<small>{letters.get(l)}</small></a>
+        ) : <span class="off">{l}</span>)}
+      </nav>
+    </section>
+
+    <section class="section panel" aria-labelledby="t-villes">
+      <div class="sh"><h2 id="t-villes">Toutes les communes</h2><a href="/villes">Annuaire des villes →</a></div>
+      <ul class="cities">
+        {s.cities.map((c) => <li><a href={`/ville/${c.city_slug}`}>{c.city} <span>{c.n}</span></a></li>)}
+      </ul>
+    </section>
+  </div>
+</Base>
+
+<style>
+  .hero { padding-top: 2.5rem; }
+  .grad { background: linear-gradient(135deg, var(--accent), var(--accent-2)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  h1 { font-size: clamp(2.1rem, 5.5vw, 3.3rem); line-height: 1.05; letter-spacing: -0.035em; margin: 0 0 .7rem; }
+  .lede { color: var(--muted); font-size: 1.08rem; margin: 0; }
+  .search { margin-top: 1.5rem; }
+  .section { margin-top: 3rem; }
+  .sh { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: .5rem 1rem; margin-bottom: 1rem; }
+  .sh h2, .panel h2 { margin: 0; font-size: 1.3rem; }
+  .sh a { color: var(--accent); font-weight: 600; font-size: .9rem; }
+  .letters { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: 1rem; }
+  .letters a, .letters .off {
+    display: flex; flex-direction: column; align-items: center; justify-content: center; min-width: 3rem; height: 3.2rem;
+    border-radius: 12px; font-weight: 800; background: var(--surface-2); border: 1px solid var(--line);
+  }
+  .letters a small { font-size: .65rem; font-weight: 600; color: var(--muted); }
+  .letters a:hover { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .letters a:hover small { color: inherit; }
+  .letters .off { opacity: .35; }
+  .jump { display: flex; flex-wrap: wrap; gap: .4rem; margin-bottom: 1.5rem; }
+  .jump a { display: inline-flex; align-items: center; gap: .45rem; padding: .35rem .8rem; border-radius: 999px; background: var(--surface); border: 1px solid var(--line); font-size: .84rem; font-weight: 500; }
+  .jump a:hover { border-color: hsl(var(--h) 60% 55%); }
+  .d { width: 8px; height: 8px; border-radius: 50%; background: hsl(var(--h) 65% 55%); }
+  .uni { margin-top: 1.25rem; padding: 1.1rem; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow); scroll-margin-top: calc(var(--header-h) + 1rem); }
+  .uhead { display: flex; align-items: center; gap: .8rem; margin: -1.1rem -1.1rem 1rem; padding: 1rem 1.1rem; border-bottom: 1px solid var(--line); border-radius: var(--radius) var(--radius) 0 0; background: linear-gradient(135deg, hsl(var(--h) 75% 94%), var(--surface)); }
+  .mark { flex: none; display: grid; place-items: center; width: 42px; height: 42px; border-radius: 12px; background: hsl(var(--h) 65% 55%); color: #fff; font-weight: 800; font-size: 1.15rem; }
+  .ut { flex: 1; min-width: 0; }
+  .ut h3 { margin: 0; font-size: 1.08rem; }
+  .ut span { color: var(--muted); font-size: .82rem; }
+  .go { flex: none; color: hsl(var(--h) 50% 35%); font-weight: 700; font-size: .86rem; }
+  .uhead:hover h3 { color: hsl(var(--h) 55% 35%); }
+  @media (max-width: 560px) { .go { display: none; } }
+  .cities { list-style: none; padding: 0; margin: 0; columns: 3 12rem; column-gap: 2rem; }
+  .cities a { display: flex; justify-content: space-between; padding: .35rem 0; font-weight: 500; }
+  .cities a:hover { color: var(--accent); }
+  .cities span { color: var(--muted); font-size: .8rem; }
+</style>

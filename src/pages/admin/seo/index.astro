@@ -1,0 +1,318 @@
+---
+import Admin from '../../../layouts/Admin.astro';
+import { CITY } from '../../../config';
+import Icon from '../../../components/Icon.astro';
+import { all, audit } from '../../../lib/db';
+import { flash } from '../../../lib/flash';
+import {
+  settings, saveSetting, cleanSetting, SEO_SETTING_KEYS, SETTING_FORMATS, seoPages, saveSeoPage, normalizePath,
+} from '../../../lib/settings';
+import { EVENTS, CONTEXT_PARAMS } from '../../../lib/analytics';
+import { universes, universeUrl, categoryUrl } from '../../../lib/taxonomy';
+import { TEMPLATE_TYPES, template, savedTemplate, saveTemplate, siteVars, DESC_MAX, type TemplateType } from '../../../lib/seoTemplates';
+import { fillTemplate } from '../../../lib/seoVars';
+import { ficheVars } from '../../../lib/seo';
+import { getFiche, universeCounts, stats, CERTIFIED_SQL } from '../../../lib/fiches';
+import SeoVarChips from '../../../components/SeoVarChips.astro';
+import { DEFAULT_NEWS_SOURCES, newsStatus } from '../../../lib/newsFeed';
+
+const me = Astro.locals.user!;
+const LABELS: Record<(typeof SEO_SETTING_KEYS)[number], string> = {
+  gtm_id: 'ID du conteneur Google Tag Manager',
+  ga4_id: 'ID de mesure Google Analytics 4',
+  google_verification: 'Vérification Google Search Console',
+  bing_verification: 'Vérification Bing Webmaster Tools',
+  news_feed_url: 'Sources des actualités (page d’accueil)',
+  schema_phone: 'Téléphone dans les données structurées',
+};
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const action = form.get('_action');
+  if (action === 'settings') {
+    const bad: string[] = [];
+    for (const key of SEO_SETTING_KEYS) {
+      const v = cleanSetting(key, String(form.get(key) ?? ''));
+      if (v && !SETTING_FORMATS[key].test(v)) bad.push(LABELS[key]);
+      else saveSetting(key, v);
+    }
+    audit(me.id, 'seo.settings');
+    flash(Astro.cookies, bad.length ? 'error' : 'ok', bad.length ? `Format invalide, non enregistré : ${bad.join(', ')}.` : 'Réglages enregistrés.');
+  }
+  if (action === 'templates') {
+    for (const type of Object.keys(TEMPLATE_TYPES) as TemplateType[]) {
+      for (const field of ['title', 'description'] as const) {
+        const v = String(form.get(`${type}_${field}`) ?? '').trim();
+        // Identique au modèle par défaut : rien n'est enregistré (les futures améliorations du défaut s'appliqueront).
+        saveTemplate(type, field, v === TEMPLATE_TYPES[type][field] ? '' : v);
+      }
+    }
+    audit(me.id, 'seo.templates');
+    flash(Astro.cookies, 'ok', 'Modèles enregistrés : ils s’appliquent immédiatement à toutes les pages concernées.');
+  }
+  if (action === 'pages') {
+    const paths = form.getAll('path').map(String);
+    const titles = form.getAll('title').map(String);
+    const descs = form.getAll('description').map(String);
+    let n = 0;
+    paths.forEach((raw, i) => {
+      const path = normalizePath(raw);
+      if (!raw.trim() || !path || path.startsWith('/admin') || path.startsWith('/compte') || path.startsWith('/api')) return;
+      saveSeoPage(path, titles[i]?.trim().slice(0, 200) ?? '', descs[i]?.trim().slice(0, 400) ?? '');
+      n++;
+    });
+    audit(me.id, 'seo.pages', String(n));
+    flash(Astro.cookies, 'ok', 'Titles et descriptions enregistrés.');
+  }
+  return Astro.redirect('/admin/seo');
+}
+
+const cfg = settings();
+const news = await newsStatus();
+
+// Exemples réels pour l'aperçu des modèles (une fiche, une catégorie, un univers, une ville).
+const sampleFicheId = all<{ id: number }>(`SELECT id FROM fiches WHERE status = 'published' ORDER BY ${CERTIFIED_SQL} DESC, views DESC LIMIT 1`)[0]?.id;
+const sampleFiche = sampleFicheId ? getFiche(sampleFicheId) : null;
+const uc = universeCounts();
+const sampleUni = [...uc].sort((a, b) => b.count - a.count)[0];
+const sampleCat = sampleUni?.categories.slice().sort((a, b) => b.count - a.count)[0];
+const sampleCity = stats().cities[0];
+const samples: Record<TemplateType, Record<string, string>> = {
+  fiche: sampleFiche ? ficheVars(sampleFiche) : ficheVars({ name: 'Boulangerie Dupont', city: CITY.name, category: '', short_desc: 'Pains au levain et pâtisseries maison.' }),
+  categorie: { categorie: sampleCat?.name ?? 'Plombiers', categorie_min: (sampleCat?.name ?? 'Plombiers').toLowerCase(), univers: sampleUni?.name ?? '', univers_description: sampleUni?.description ?? '', ville: CITY.area, nombre: String(sampleCat?.count ?? 12), page: '' },
+  univers: { univers: sampleUni?.name ?? 'Bâtiment', univers_description: sampleUni?.description ?? '', nombre: String(sampleUni?.count ?? 40) },
+  ville: { ville: sampleCity?.city ?? CITY.name, nombre: String(sampleCity?.n ?? 100), page: '' },
+};
+const sv = siteVars();
+const preview = (type: TemplateType, field: 'title' | 'description') => fillTemplate(template(type, field), { ...sv, ...samples[type] }, field === 'description' ? DESC_MAX : 0);
+const MAIN = [
+  { path: '/', label: 'Accueil' },
+  { path: '/annuaire', label: 'Annuaire' },
+  { path: '/univers', label: 'Toutes les catégories' },
+  { path: '/villes', label: 'Villes' },
+  { path: '/tarifs', label: 'Tarifs' },
+  { path: '/creer-ma-fiche', label: 'Créer ma fiche' },
+];
+const saved = seoPages();
+const rows = [
+  ...MAIN.map((m) => ({ ...m, title: saved.get(m.path)?.title ?? '', description: saved.get(m.path)?.description ?? '', fixed: true })),
+  ...[...saved.values()].filter((r) => !MAIN.some((m) => m.path === r.path)).map((r) => ({ ...r, label: '', fixed: false })),
+  { path: '', label: '', title: '', description: '', fixed: false },
+];
+const suggestions = universes.flatMap((u) => [universeUrl(u), ...u.categories.map((c) => categoryUrl(u, c))]);
+const cities = all<{ city_slug: string }>("SELECT DISTINCT city_slug FROM fiches WHERE status = 'published' AND city_slug <> '' ORDER BY city_slug LIMIT 200");
+---
+<Admin title="SEO et suivi d'audience" subtitle="Google Tag Manager, vérification des moteurs, titles et descriptions">
+  <form method="post" class="panel">
+    <input type="hidden" name="_action" value="settings" />
+    <h2>Suivi d'audience</h2>
+    <div class="grid">
+      <label class="field">
+        <span>{LABELS.gtm_id}</span>
+        <input name="gtm_id" value={cfg.gtm_id} placeholder="GTM-XXXXXXX" autocomplete="off" />
+        <small>Tag Manager &gt; en haut à droite. Vide = aucun suivi, aucun bandeau cookies.</small>
+      </label>
+      <label class="field">
+        <span>{LABELS.ga4_id}</span>
+        <input name="ga4_id" value={cfg.ga4_id} placeholder="G-XXXXXXXXXX" autocomplete="off" />
+        <small>Analytics &gt; Administration &gt; Flux de données. Sert à générer le conteneur GTM ci-dessous.</small>
+      </label>
+    </div>
+    <p class="state">
+      {cfg.gtm_id
+        ? <><span class="badge badge-ok">Actif</span> GTM est chargé sur le site public, après acceptation du bandeau cookies. Les pages de l'admin ne sont pas suivies.</>
+        : <><span class="badge">Inactif</span> Aucun outil de mesure n'est chargé.</>}
+    </p>
+
+    <h2>Vérification des moteurs de recherche</h2>
+    <div class="grid">
+      <label class="field">
+        <span>{LABELS.google_verification}</span>
+        <input name="google_verification" value={cfg.google_verification} placeholder='Code ou balise <meta name="google-site-verification" …>' autocomplete="off" />
+        <small>Search Console &gt; Ajouter une propriété &gt; Préfixe de l'URL &gt; Balise HTML. Collez la balise entière.</small>
+      </label>
+      <label class="field">
+        <span>{LABELS.bing_verification}</span>
+        <input name="bing_verification" value={cfg.bing_verification} placeholder='Code ou balise <meta name="msvalidate.01" …>' autocomplete="off" />
+        <small>Bing Webmaster Tools &gt; Balise HTML (ou import direct depuis la Search Console).</small>
+      </label>
+    </div>
+
+    <h2>Protection des coordonnées</h2>
+    <div class="grid">
+      <label class="check">
+        <input type="checkbox" name="schema_phone" value="off" checked={cfg.schema_phone === 'off'} />
+        <span><strong>Retirer le téléphone des données structurées des fiches.</strong> Sur les fiches, le téléphone et l'email ne s'affichent qu'au clic (limité à 30 par heure et par visiteur). Le téléphone reste toutefois lisible dans le code de la page pour Google, et donc pour les aspirateurs : cochez pour le retirer aussi, au prix d'un signal en moins pour la recherche locale.</span>
+      </label>
+    </div>
+
+    <h2>Actualités locales sur l'accueil</h2>
+    <div class="grid">
+      <label class="field">
+        <span>{LABELS.news_feed_url}</span>
+        <textarea name="news_feed_url" rows="4" placeholder={DEFAULT_NEWS_SOURCES.join('\n')}>{cfg.news_feed_url}</textarea>
+        <small>Une adresse par ligne (8 au plus), en https : l'adresse d'un flux RSS ou Atom, ou simplement celle d'une page du site, dont le flux est trouvé automatiquement. Vide = sources par défaut ({DEFAULT_NEWS_SOURCES.length ? DEFAULT_NEWS_SOURCES.map((u) => new URL(u).hostname.replace(/^www\./, '')).join(', ') : 'aucune : bloc masqué'}). Les articles sur les faits divers, décès, accidents, affaires judiciaires, licenciements ou faillites sont écartés.</small>
+      </label>
+    </div>
+    <ul class="feeds">
+      {news.map((n) => (
+        <li>
+          <span class:list={['badge', { 'badge-ok': n.items > 0 }]}>{n.feeds ? `${n.items} article${n.items > 1 ? 's' : ''} retenu${n.items > 1 ? 's' : ''} sur ${n.total}` : 'Flux introuvable'}</span>
+          <a href={n.source} target="_blank" rel="noopener">{n.source}</a>{n.feed && n.feed !== n.source && <small> → {n.feeds > 1 ? `${n.feeds} flux` : 'flux'} : {n.feed}</small>}
+        </li>
+      ))}
+    </ul>
+    <div class="acts"><button class="btn gradient-bg">Enregistrer</button></div>
+  </form>
+
+  <form method="post" class="panel">
+    <input type="hidden" name="_action" value="templates" />
+    <h2>Modèles de titles et descriptions</h2>
+    <p class="muted">
+      Comme dans Yoast : écrivez un modèle avec des variables (<code>%%nom%%</code>, <code>%%ville%%</code>…), remplacées sur chaque page.
+      Cliquez sur une variable pour l'insérer à l'endroit du curseur. Une variable vide est retirée proprement. Champ vide = modèle par défaut.
+      Un title ou une description saisis dans une fiche restent prioritaires (et acceptent aussi les variables).
+    </p>
+    <div class="tpls">
+      {(Object.keys(TEMPLATE_TYPES) as TemplateType[]).map((type) => (
+        <fieldset class="page tpl" data-seo-scope data-sample={JSON.stringify({ ...sv, ...samples[type] })}>
+          <legend>{TEMPLATE_TYPES[type].label}</legend>
+          <label class="field">
+            <span>Title <small data-tpl-count></small></span>
+            <input name={`${type}_title`} value={savedTemplate(type, 'title') || TEMPLATE_TYPES[type].title} maxlength="400" data-seo-field data-tpl="title" data-default={TEMPLATE_TYPES[type].title} />
+          </label>
+          <label class="field">
+            <span>Meta description <small data-tpl-count></small></span>
+            <textarea name={`${type}_description`} rows="2" maxlength="400" data-seo-field data-tpl="description" data-default={TEMPLATE_TYPES[type].description}>{savedTemplate(type, 'description') || TEMPLATE_TYPES[type].description}</textarea>
+          </label>
+          <SeoVarChips type={type} />
+          <div class="serp" aria-label="Aperçu dans Google">
+            <p class="serp-t" data-prev="title">{preview(type, 'title')}</p>
+            <p class="serp-d" data-prev="description">{preview(type, 'description')}</p>
+            <p class="serp-x">Exemple : {type === 'fiche' ? samples.fiche.nom : type === 'categorie' ? samples.categorie.categorie : type === 'univers' ? samples.univers.univers : samples.ville.ville}</p>
+          </div>
+          <button type="button" class="btn btn-ghost btn-sm reset" data-reset>Revenir au modèle par défaut</button>
+        </fieldset>
+      ))}
+    </div>
+    <div class="acts"><button class="btn gradient-bg">Enregistrer les modèles</button></div>
+  </form>
+
+  <form method="post" class="panel" data-seo-scope>
+    <input type="hidden" name="_action" value="pages" />
+    <h2>Titles et meta descriptions</h2>
+    <p class="muted">Remplacent le texte généré automatiquement pour la page indiquée (première page seulement). Laisser vide = texte automatique. Les fiches ont leurs propres champs SEO, dans la fiche. Conseillé : title de 50 à 60 caractères, description de 140 à 160. Variables : celles ci-dessous partout, et celles du type de page (catégorie, univers, ville) sur ces pages.</p>
+    <SeoVarChips />
+    <datalist id="paths">{[...suggestions, ...cities.map((c) => `/ville/${c.city_slug}`)].map((s) => <option value={s} />)}</datalist>
+    <div class="pages">
+      {rows.map((r) => (
+        <fieldset class="page">
+          <legend>{r.fixed ? <>{r.label} <code>{r.path}</code></> : r.path ? <code>{r.path}</code> : 'Ajouter une page'}</legend>
+          {r.fixed
+            ? <input type="hidden" name="path" value={r.path} />
+            : <label class="field"><span>Chemin</span><input name="path" value={r.path} list="paths" placeholder="/univers/restauration" /></label>}
+          <label class="field"><span>Title <small data-count></small></span><input name="title" value={r.title} maxlength="200" data-limit="60" data-seo-field /></label>
+          <label class="field"><span>Meta description <small data-count></small></span><textarea name="description" maxlength="400" rows="2" data-limit="160" data-seo-field>{r.description}</textarea></label>
+        </fieldset>
+      ))}
+    </div>
+    <div class="acts"><button class="btn gradient-bg">Enregistrer</button></div>
+  </form>
+
+  <section class="panel">
+    <h2>Plan de taggage</h2>
+    <p class="muted">
+      Événements envoyés à Google Tag Manager (dataLayer). Sur chaque page : {CONTEXT_PARAMS.map((x) => <code>{x}</code>)}.
+      Aucune donnée personnelle des visiteurs n'est transmise. Les montants sont HT, en euros.
+    </p>
+    <div class="table-wrap">
+      <table class="table">
+        <thead><tr><th>Événement</th><th>Déclenchement</th><th>Paramètres</th><th>Événement clé</th></tr></thead>
+        <tbody>
+          {EVENTS.map((e) => (
+            <tr>
+              <td><code>{e.name}</code></td>
+              <td>{e.when}</td>
+              <td class="params">{e.params.map((x) => <code>{x}</code>)}{e.ecommerce && <code>ecommerce</code>}</td>
+              <td>{e.key ? <Icon name="check" size={16} /> : ''}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Mise en place</h3>
+    <ol class="steps">
+      <li>Créer une propriété GA4 et un conteneur GTM (Web), puis saisir leurs deux identifiants ci-dessus.</li>
+      <li>
+        {cfg.ga4_id
+          ? <a class="btn btn-ghost btn-sm" href="/admin/seo/conteneur-gtm.json" download><Icon name="external" size={14} /> Télécharger le conteneur GTM</a>
+          : <span class="muted">Le bouton de téléchargement du conteneur apparaît une fois l'ID GA4 enregistré.</span>}
+        <br />Dans GTM : Administration &gt; Importer un conteneur &gt; choisir le fichier, espace de travail existant, option <strong>Fusionner</strong>. Puis <strong>Envoyer</strong> pour publier.
+      </li>
+      <li>Dans GA4 &gt; Administration &gt; Événements clés : marquer comme clés les événements cochés dans le tableau (ils apparaissent après leur premier déclenchement).</li>
+      <li>Dans GA4 &gt; Définitions personnalisées : créer une dimension (portée Événement) pour chaque paramètre à analyser, par exemple <code>page_type</code>, <code>fiche_category</code>, <code>fiche_city</code>, <code>fiche_plan</code>, <code>search_term</code>.</li>
+      <li>Vérifier avec l'aperçu de GTM (Tag Assistant) : accepter le bandeau cookies, puis cliquer sur un téléphone de fiche, faire une recherche…</li>
+    </ol>
+  </section>
+</Admin>
+
+<script>
+  import { fillTemplate } from '../../../lib/seoVars';
+
+  // Modèles : aperçu en direct sur un exemple réel, compteur sur le texte final, retour au modèle par défaut.
+  document.querySelectorAll<HTMLElement>('.tpl[data-sample]').forEach((box) => {
+    const vars = JSON.parse(box.dataset.sample ?? '{}');
+    const fields = [...box.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('[data-tpl]')];
+    const render = () => fields.forEach((el) => {
+      const isTitle = el.dataset.tpl === 'title';
+      const out = fillTemplate(el.value || el.dataset.default!, vars, isTitle ? 0 : 160);
+      const prev = box.querySelector<HTMLElement>(`[data-prev="${el.dataset.tpl}"]`);
+      if (prev) prev.textContent = out;
+      const count = el.closest('.field')?.querySelector<HTMLElement>('[data-tpl-count]');
+      const max = isTitle ? 60 : 160;
+      if (count) { count.textContent = `${out.length} / ${max} (exemple)`; count.classList.toggle('over', out.length > max); }
+    });
+    box.addEventListener('input', render);
+    box.querySelector('[data-reset]')?.addEventListener('click', () => { fields.forEach((el) => (el.value = el.dataset.default!)); render(); });
+    render();
+  });
+
+  // Compteur de caractères des titles et descriptions.
+  document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('[data-limit]').forEach((el) => {
+    const out = el.closest('.field')?.querySelector<HTMLElement>('[data-count]');
+    const max = Number(el.dataset.limit);
+    const show = () => { if (out) { out.textContent = el.value ? `${el.value.length} / ${max}` : ''; out.classList.toggle('over', el.value.length > max); } };
+    el.addEventListener('input', show);
+    show();
+  });
+</script>
+
+<style>
+  .feeds { list-style: none; margin: .6rem 0 0; padding: 0; display: grid; gap: .35rem; font-size: .86rem; }
+  .feeds li { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
+  .feeds small { color: var(--muted); word-break: break-all; }
+  textarea[name=news_feed_url] { width: 100%; font: inherit; }
+  .panel { display: grid; gap: 1rem; margin-bottom: 1.2rem; }
+  h2 { margin: 0; font-size: 1.1rem; }
+  h3 { margin: .6rem 0 0; font-size: 1rem; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr)); gap: 1rem; }
+  .state { margin: 0; display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; font-size: .92rem; }
+  .acts { display: flex; justify-content: flex-end; }
+  .pages { display: grid; gap: .8rem; }
+  .page { display: grid; gap: .6rem; margin: 0; padding: .9rem 1rem 1rem; border: 1px solid var(--line); border-radius: 12px; min-width: 0; }
+  .page legend { padding: 0 .4rem; font-weight: 700; font-size: .92rem; }
+  .page legend code { font-weight: 500; color: var(--muted); }
+  [data-count] { font-weight: 500; color: var(--muted); }
+  :global(.over) { color: #b91c1c !important; }
+  .params { display: flex; flex-wrap: wrap; gap: .25rem; }
+  code { font-size: .82rem; padding: .05rem .35rem; border-radius: 6px; background: var(--surface-2); }
+  .steps { margin: 0; padding-left: 1.2rem; display: grid; gap: .6rem; font-size: .93rem; }
+  .tpls { display: grid; gap: .8rem; }
+  .tpl .reset { justify-self: start; }
+  .serp { padding: .8rem 1rem; border: 1px solid var(--line); border-radius: 10px; background: #fff; font-family: Arial, sans-serif; }
+  .serp p { margin: 0; }
+  .serp-t { color: #1a0dab; font-size: 1.05rem; line-height: 1.35; }
+  .serp-d { color: #4d5156; font-size: .86rem; line-height: 1.5; margin-top: .2rem !important; }
+  .serp-x { color: var(--muted); font-size: .75rem; margin-top: .4rem !important; font-family: inherit; }
+</style>

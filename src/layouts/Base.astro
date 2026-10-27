@@ -1,0 +1,292 @@
+---
+import '../styles/global.css';
+import { SITE, ENV, CITY } from '../config';
+import { siteGraph, webPage, PAGE_TYPES } from '../lib/schema';
+import { settings, seoPage } from '../lib/settings';
+import { fillCustom, DESC_MAX } from '../lib/seoTemplates';
+import { pageTypeOf, type TrackEvent } from '../lib/analytics';
+import { ogPathFor } from '../lib/ogImage';
+
+interface Props {
+  title: string;
+  description?: string;
+  noindex?: boolean;
+  jsonLd?: object | object[];
+  canonical?: string;
+  /** Type schema.org de la page quand elle n'a pas de balisage propre (WebPage par défaut). */
+  pageType?: string;
+  /** Contexte de la page envoyé à Google Tag Manager (page_type, fiche_id…). */
+  dataLayer?: Record<string, string | number | boolean>;
+  /** Événements à envoyer à l'affichage de la page (search, view_fiche, purchase…). */
+  events?: TrackEvent[];
+  /** Variables SEO de la page (%%categorie%%, %%ville%%…), utilisables dans les titles saisis dans Admin > SEO. */
+  seoVars?: Record<string, string>;
+  /** Image de partage (Open Graph), chemin du site ou URL absolue. Par défaut : icône du site. */
+  image?: string;
+  /** Paramètres d'URL conservés dans la canonical (ceux qui changent réellement le contenu). Par défaut : la pagination. */
+  canonicalParams?: string[];
+}
+const { noindex = false, jsonLd, canonical: canonicalPath, pageType, dataLayer = {}, events = [], canonicalParams = ['page'] } = Astro.props;
+// Title et description saisis dans Admin > SEO pour ce chemin : prioritaires (première page seulement).
+const pageNum = Astro.url.searchParams.get('page');
+const custom = !pageNum || pageNum === '1' ? seoPage(Astro.url.pathname) : null;
+const seoVars = Astro.props.seoVars ?? {};
+// Image de partage : celle de la page (fiche), sinon une image générée avec le titre de la page (lib/ogImage).
+const shareImg = Astro.props.image || ogPathFor(Astro.url.pathname);
+const ogImage = shareImg ? (/^https?:/.test(shareImg) ? shareImg : `${ENV.siteUrl}${shareImg}`) : `${ENV.siteUrl}/icon-192.png`;
+const rawTitle = custom?.title ? fillCustom(custom.title, seoVars) : Astro.props.title;
+// Title : au-delà de 70 caractères, le suffixe « | <nom du site> » est retiré (il serait tronqué dans Google).
+const suffix = ` | ${SITE.fullName}`;
+const title = rawTitle.length > 70 && rawTitle.endsWith(suffix) ? rawTitle.slice(0, -suffix.length) : rawTitle;
+// Description : complétée si elle est trop courte (< 70 caractères), numéro de page ajouté au-delà de la première.
+let description = custom?.description ? fillCustom(custom.description, seoVars, DESC_MAX) : Astro.props.description || SITE.description;
+if (description.length < 70) description = `${description.replace(/\s*$/, '')}${/[.!?]$/.test(description.trim()) ? '' : '.'} ${SITE.fullName}, l'annuaire des entreprises et commerces ${CITY.of} et du ${CITY.department}.`;
+if (pageNum && pageNum !== '1') description = `${description} Page ${pageNum}.`;
+// Canonical : chemin + paramètres qui changent réellement le contenu (pagination, ville), jamais les autres.
+const keep = new URLSearchParams();
+for (const k of canonicalParams) { const v = Astro.url.searchParams.get(k); if (v && !(k === 'page' && v === '1')) keep.set(k, v); }
+const canonical = `${ENV.siteUrl}${canonicalPath ?? Astro.url.pathname}${keep.size ? `?${keep}` : ''}`;
+const path = Astro.url.pathname;
+const { user, flash } = Astro.locals;
+// Données structurées : un seul graphe par page, avec l'éditeur et le site (référencés par @id).
+const nodes = (jsonLd ? (Array.isArray(jsonLd) ? jsonLd : [jsonLd]) : []).map(({ '@context': _, ...n }: any) => n);
+const hasPage = nodes.some((n) => [].concat(n['@type']).some((t: string) => PAGE_TYPES.has(t)));
+if (!hasPage) nodes.unshift(webPage({ url: canonical, name: title, description, type: pageType }));
+const graph = { '@context': 'https://schema.org', '@graph': [...siteGraph(), ...nodes] };
+
+// Suivi d'audience : Google Tag Manager chargé seulement après consentement (bandeau cookies).
+const cfg = settings();
+const gtm = cfg.gtm_id;
+const json = (v: unknown) => JSON.stringify(v).replace(/</g, '\\u003c');
+const context = {
+  page_type: pageTypeOf(path),
+  user_status: user ? (user.role === 'admin' ? 'admin' : 'connecte') : 'visiteur',
+  ...dataLayer,
+};
+const pushes = [context, ...events, ...Astro.locals.events];
+const tagBoot = gtm && `window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments)}
+gtag('consent','default',{analytics_storage:'denied',ad_storage:'denied',ad_user_data:'denied',ad_personalization:'denied'});
+function P(o){var t=o.ecommerce&&o.ecommerce.transaction_id;if(t){try{if(localStorage.getItem('tx:'+t))return;localStorage.setItem('tx:'+t,'1')}catch(e){}dataLayer.push({ecommerce:null})}dataLayer.push(o)}
+${pushes.map((p) => `P(${json(p)});`).join('\n')}
+(function(){var K='cookie-consent',ID=${json(gtm)},c=null;
+try{c=JSON.parse(localStorage.getItem(K))}catch(e){}
+function load(){if(window.__gtmLoaded)return;window.__gtmLoaded=1;gtag('consent','update',{analytics_storage:'granted'});
+dataLayer.push({'gtm.start':Date.now(),event:'gtm.js'});var s=document.createElement('script');s.async=1;
+s.src='https://www.googletagmanager.com/gtm.js?id='+ID;document.head.appendChild(s)}
+window.setConsent=function(v){var was=c&&c.v;c={v:v,t:Date.now()};try{localStorage.setItem(K,JSON.stringify(c))}catch(e){}
+document.documentElement.classList.remove('ask-consent');
+if(v==='granted')load();else if(was==='granted'){document.cookie.split(';').forEach(function(x){var n=x.split('=')[0].trim();
+if(/^_ga|^_gid/.test(n)){var h=location.hostname.split('.');for(var i=0;i<h.length;i++){document.cookie=n+'=;max-age=0;path=/;domain=.'+h.slice(i).join('.')}document.cookie=n+'=;max-age=0;path=/'}});location.reload()}};
+var valid=c&&c.t&&Date.now()-c.t<(c.v==='granted'?390:180)*864e5;
+if(valid&&c.v==='granted')load();else if(!valid)document.documentElement.classList.add('ask-consent');
+document.addEventListener('click',function(e){var el=e.target.closest&&e.target.closest('[data-ev]');if(!el)return;
+var p={event:el.dataset.ev};for(var k in el.dataset){if(k.length>2&&k.indexOf('ev')===0){p[k.slice(2).replace(/[A-Z]/g,function(m){return '_'+m.toLowerCase()}).replace(/^_/,'')]=el.dataset[k]}}
+if(el.href)p.link_url=el.href.split(/[?&]utm_/)[0];dataLayer.push(p)})})();`;
+---
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <link rel="canonical" href={canonical} />
+    <meta name="robots" content={noindex ? 'noindex, follow' : 'index, follow, max-image-preview:large'} />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content={canonical} />
+    <meta property="og:site_name" content={SITE.fullName} />
+    <meta property="og:image" content={ogImage} />
+    {shareImg && <meta name="twitter:card" content="summary_large_image" />}
+    <meta property="og:locale" content="fr_FR" />
+    <meta name="theme-color" content="#f5f0e8" />
+    <meta name="color-scheme" content="light" />
+    <link rel="icon" href="/favicon-32.png" sizes="32x32" type="image/png" />
+    <link rel="icon" href="/icon-192.png" sizes="192x192" type="image/png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    {cfg.google_verification && <meta name="google-site-verification" content={cfg.google_verification} />}
+    {cfg.bing_verification && <meta name="msvalidate.01" content={cfg.bing_verification} />}
+    <script type="application/ld+json" set:html={JSON.stringify(graph).replace(/</g, '\\u003c')} />
+    {tagBoot && <script is:inline set:html={tagBoot} />}
+  </head>
+  <body>
+    <a href="#contenu" class="skip">Aller au contenu</a>
+    <header class="site-header">
+      <div class="wrap bar">
+        <a href="/" class="logo" aria-label={`${SITE.fullName}, accueil`}>
+          <img src={SITE.parent.logo} alt={SITE.parent.name} width="75" height="32" />
+          <span class="logo-sep" aria-hidden="true"></span>
+          <span class="logo-txt">{SITE.name}</span>
+        </a>
+        <nav aria-label="Principale" class="top-nav">
+          <a href="/annuaire" class="top-link" aria-current={path.startsWith('/annuaire') || path.startsWith('/recherche') ? 'page' : undefined}>Annuaire</a>
+          <a href="/univers" class="top-link" aria-current={path.startsWith('/univers') ? 'page' : undefined}>Catégories</a>
+          <a href="/tarifs" class="top-link hide-sm" aria-current={path.startsWith('/tarifs') ? 'page' : undefined}>Tarifs</a>
+          {user ? (
+            <>
+              {user.role === 'admin' && <a href="/admin" class="top-link" aria-current={path.startsWith('/admin') ? 'page' : undefined}>Admin</a>}
+              <a href="/compte" class="btn btn-ghost acct" aria-current={path.startsWith('/compte') ? 'page' : undefined}>Mon compte</a>
+            </>
+          ) : (
+            <>
+              <a href="/connexion" class="top-link hide-sm">Connexion</a>
+              <a href="/creer-ma-fiche" class="btn gradient-bg cta">Créer ma fiche</a>
+            </>
+          )}
+        </nav>
+      </div>
+    </header>
+    {flash && (
+      <div class:list={['flash', `flash-${flash.type}`]} role="status">
+        <div class="wrap">{flash.message}</div>
+      </div>
+    )}
+    <main id="contenu">
+      <slot />
+    </main>
+    <footer class="site-footer">
+      <div class="wrap foot">
+        <div>
+          <a class="foot-logo" href="/"><img src={SITE.parent.logo} alt={SITE.parent.name} width="84" height="36" /><span>{SITE.name}</span></a>
+          <p class="foot-tag">{SITE.tagline}</p>
+          <p class="foot-tag"><a class="back-main" href={SITE.parent.url}>← Retour sur {SITE.parent.url.replace(/^https?:\/\/(www\.)?/, '')}</a></p>
+        </div>
+        <nav aria-label="Pied de page" class="foot-cols">
+          <div>
+            <p class="foot-h">Annuaire</p>
+            <a href="/annuaire">Rechercher</a>
+            <a href="/univers">Toutes les catégories</a>
+            <a href="/villes">Villes</a>
+          </div>
+          <div>
+            <p class="foot-h">Professionnels</p>
+            <a href="/creer-ma-fiche">Créer ma fiche</a>
+            <a href="/tarifs">Tarifs Pro & Premium</a>
+            <a href="/compte">Mon compte</a>
+          </div>
+          <div>
+            <p class="foot-h">Informations</p>
+            <a href="/mentions-legales">Mentions légales</a>
+            <a href="/cgu">Conditions d'utilisation</a>
+            <a href="/confidentialite">Confidentialité</a>
+            <a href="/sources-et-donnees">Sources des données</a>
+            {gtm && <button type="button" class="foot-btn" onclick="document.documentElement.classList.add('ask-consent')">Gérer les cookies</button>}
+          </div>
+        </nav>
+      </div>
+      <div class="wrap foot-bottom">
+        <span>© {new Date().getFullYear()} {SITE.parent.name} · {SITE.fullName}</span>
+      </div>
+    </footer>
+    {gtm && (
+      <div class="consent" role="dialog" aria-labelledby="consent-t" aria-describedby="consent-d">
+        <p id="consent-t" class="consent-h">Mesure d'audience</p>
+        <p id="consent-d">Nous utilisons des cookies de mesure d'audience (Google Analytics) pour comprendre comment l'annuaire est utilisé et l'améliorer. Ils ne sont déposés qu'avec votre accord, modifiable à tout moment. <a href="/confidentialite#cookies">En savoir plus</a></p>
+        <div class="consent-btns">
+          <button type="button" class="btn btn-ghost" onclick="setConsent('denied')">Refuser</button>
+          <button type="button" class="btn btn-ghost" onclick="setConsent('granted')">Accepter</button>
+        </div>
+      </div>
+    )}
+    <button type="button" class="to-top" data-to-top aria-label="Revenir en haut" hidden>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 15 6-6 6 6"></path></svg>
+    </button>
+  </body>
+</html>
+
+<script>
+  const toTop = document.querySelector<HTMLButtonElement>('[data-to-top]');
+  if (toTop) {
+    const onScroll = () => { toTop.hidden = scrollY < 900; };
+    addEventListener('scroll', onScroll, { passive: true });
+    onScroll();
+    toTop.addEventListener('click', () => scrollTo({ top: 0 }));
+  }
+
+  // Clic sur une mise en avant sponsorisée (statistiques du client) : <a data-sponsor="id">
+  document.addEventListener('click', (e) => {
+    const a = (e.target as HTMLElement).closest<HTMLElement>('[data-sponsor]');
+    if (a) navigator.sendBeacon?.('/api/track', `s:${a.dataset.sponsor}`);
+  });
+
+  // Confirmation avant les actions destructrices : <button data-confirm="…">
+  document.addEventListener('click', (e) => {
+    const el = (e.target as HTMLElement).closest<HTMLElement>('[data-confirm]');
+    if (el && !confirm(el.dataset.confirm)) e.preventDefault();
+  });
+</script>
+
+<style>
+  .skip {
+    position: absolute; left: 16px; top: -100px; z-index: 50;
+    padding: .5rem 1rem; border-radius: 10px; background: var(--accent); color: #fff;
+  }
+  .skip:focus { top: 12px; }
+  .site-header {
+    position: sticky; top: 0; z-index: 20; height: var(--header-h);
+    background: color-mix(in srgb, var(--bg) 82%, transparent);
+    backdrop-filter: saturate(1.4) blur(12px); -webkit-backdrop-filter: saturate(1.4) blur(12px);
+    border-bottom: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+  }
+  .bar { height: 100%; display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+  .logo { display: inline-flex; align-items: center; gap: .65rem; font-size: 1.15rem; font-weight: 800; letter-spacing: -0.02em; white-space: nowrap; color: var(--accent); }
+  .logo img { height: 32px; width: auto; }
+  .logo-sep { width: 1px; height: 26px; background: var(--line); }
+  @media (max-width: 400px) { .logo img { height: 26px; } .logo-txt { font-size: 1rem; } }
+  .top-nav { display: flex; align-items: center; gap: .35rem; }
+  .top-link { color: var(--muted); font-weight: 500; font-size: .93rem; padding: .4rem .55rem; border-radius: 8px; white-space: nowrap; }
+  .top-link:hover, .top-link[aria-current] { color: var(--text); }
+  .acct { padding: .5rem .95rem; white-space: nowrap; }
+  @media (max-width: 760px) { .hide-sm { display: none; } }
+  @media (max-width: 560px) {
+    .top-link { display: none; }
+    .cta, .acct { padding: .5rem .8rem; font-size: .85rem; }
+  }
+
+  .flash { border-bottom: 1px solid var(--line); font-weight: 500; font-size: .95rem; }
+  .flash .wrap { padding-top: .8rem; padding-bottom: .8rem; }
+  .flash-ok { background: color-mix(in srgb, #16a34a 14%, var(--bg)); }
+  .flash-error { background: color-mix(in srgb, #dc2626 14%, var(--bg)); }
+  .flash-info { background: color-mix(in srgb, var(--accent) 12%, var(--bg)); }
+
+  .site-footer { margin-top: 5rem; border-top: 1px solid var(--line); background: color-mix(in srgb, var(--surface) 55%, transparent); }
+  .foot { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 2rem; padding-top: 2.5rem; padding-bottom: 2rem; }
+  .foot-logo { display: inline-flex; align-items: center; gap: .6rem; font-weight: 800; font-size: 1.15rem; color: var(--accent); }
+  .foot-logo img { height: 36px; width: auto; }
+  .back-main { color: var(--accent); font-weight: 600; }
+  .foot-tag { color: var(--muted); font-size: .9rem; max-width: 22rem; margin: .4rem 0 0; }
+  .foot-cols { display: flex; flex-wrap: wrap; gap: 2.5rem; }
+  .foot-cols div { display: flex; flex-direction: column; gap: .45rem; font-size: .92rem; }
+  .foot-cols a { color: var(--muted); }
+  .foot-cols a:hover { color: var(--text); }
+  .foot-h { font-weight: 700; margin: 0 0 .2rem; font-size: .85rem; text-transform: uppercase; letter-spacing: .06em; }
+  .foot-bottom {
+    display: flex; flex-wrap: wrap; justify-content: space-between; gap: .5rem 1rem;
+    padding-top: 1rem; padding-bottom: 1.5rem; border-top: 1px solid var(--line); color: var(--muted); font-size: .8rem;
+  }
+
+  .foot-btn { padding: 0; border: 0; background: none; font: inherit; color: var(--muted); text-align: left; cursor: pointer; }
+  .foot-btn:hover { color: var(--text); }
+
+  .consent {
+    display: none; position: fixed; left: 16px; right: 16px; bottom: 16px; z-index: 60; max-width: 34rem;
+    padding: 1.1rem 1.2rem; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); box-shadow: var(--shadow);
+    font-size: .92rem;
+  }
+  :global(.ask-consent) .consent { display: block; }
+  .consent p { margin: 0 0 .5rem; color: var(--muted); }
+  .consent .consent-h { color: var(--text); font-weight: 700; }
+  .consent a { color: var(--accent); text-decoration: underline; }
+  .consent-btns { display: flex; gap: .5rem; justify-content: flex-end; margin-top: .8rem; }
+  .consent-btns .btn { min-width: 7rem; }
+
+  .to-top {
+    position: fixed; right: 20px; bottom: 20px; z-index: 30;
+    display: grid; place-items: center; width: 46px; height: 46px;
+    border: 1px solid var(--line); border-radius: 50%; background: var(--surface);
+    box-shadow: var(--shadow); cursor: pointer;
+  }
+  .to-top[hidden] { display: none; }
+  .to-top svg { width: 20px; height: 20px; }
+</style>

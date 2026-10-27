@@ -1,0 +1,49 @@
+---
+import Base from '../layouts/Base.astro';
+import { SITE, ENV } from '../config';
+import { findUserByEmail, createPasswordReset, rateLimited, clientIp } from '../lib/auth';
+import { send } from '../lib/mail';
+import { passwordReset } from '../lib/emails';
+
+let sent = false;
+if (Astro.request.method === 'POST') {
+  const f = await Astro.request.formData();
+  const email = String(f.get('email') ?? '').trim().toLowerCase();
+  if (!rateLimited(`reset:${clientIp(Astro.request, Astro.clientAddress)}`, 5, 3600e3)) {
+    const u = findUserByEmail(email);
+    if (u && !u.disabled) {
+      const token = createPasswordReset(u.id);
+      await send(u.email, passwordReset(`${ENV.siteUrl}/reinitialiser?token=${token}`));
+    }
+  }
+  // Même réponse que le compte existe ou non (pas de divulgation).
+  sent = true;
+}
+---
+<Base title={`Mot de passe oublié | ${SITE.fullName}`} noindex>
+  <div class="wrap auth">
+    <div class="panel">
+      <h1>Mot de passe oublié</h1>
+      {sent ? (
+        <p>Si un compte existe pour cette adresse, un email contenant un lien de réinitialisation vient d'être envoyé. Pensez à vérifier vos courriers indésirables.</p>
+      ) : (
+        <>
+          <p class="muted">Indiquez l'email de votre compte : nous vous enverrons un lien pour choisir un nouveau mot de passe.</p>
+          <form method="post" class="form">
+            <label class="field"><span>Email</span><input name="email" type="email" required autocomplete="email" /></label>
+            <button class="btn gradient-bg" type="submit">Envoyer le lien</button>
+          </form>
+        </>
+      )}
+      <p class="alt"><a href="/connexion">← Retour à la connexion</a></p>
+    </div>
+  </div>
+</Base>
+
+<style>
+  .auth { max-width: 28rem; padding-top: 3rem; }
+  h1 { margin: 0 0 .6rem; font-size: 1.6rem; }
+  .form { margin-top: 1.25rem; }
+  .alt { margin: 1.25rem 0 0; text-align: center; }
+  .alt a { color: var(--accent); font-weight: 600; }
+</style>

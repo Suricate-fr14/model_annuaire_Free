@@ -1,0 +1,97 @@
+---
+import Base from '../../../layouts/Base.astro';
+import Breadcrumb from '../../../components/Breadcrumb.astro';
+import CategoryChips from '../../../components/CategoryChips.astro';
+import FicheRow from '../../../components/FicheRow.astro';
+import Pagination from '../../../components/Pagination.astro';
+import UniverseList from '../../../components/UniverseList.astro';
+import { SITE, ENV, CITY } from '../../../config';
+import { universeCounts, listFiches } from '../../../lib/fiches';
+import { universeUrl } from '../../../lib/taxonomy';
+import { all } from '../../../lib/db';
+import { collectionGraph, ficheItem } from '../../../lib/schema';
+import { seoFor } from '../../../lib/seoTemplates';
+import { sponsorsFor } from '../../../lib/sponsors';
+import { categoryContent, faqGraph } from '../../../lib/pageContent';
+import SeoContent from '../../../components/SeoContent.astro';
+
+const u = universeCounts().find((x) => x.slug === Astro.params.universe);
+const c = u?.categories.find((x) => x.slug === Astro.params.category);
+if (!u || !c) return new Response(null, { status: 404 });
+
+const city = Astro.url.searchParams.get('ville') ?? '';
+const page = Math.max(1, Number(Astro.url.searchParams.get('page')) || 1);
+const { items, total } = listFiches({ category: c.slug, city, limit: SITE.perPage, offset: (page - 1) * SITE.perPage });
+const cities = all<{ city: string; city_slug: string; n: number }>(
+  "SELECT city, city_slug, COUNT(*) AS n FROM fiches WHERE status = 'published' AND category = ? AND city_slug <> '' GROUP BY city_slug ORDER BY n DESC",
+  c.slug,
+);
+const cityName = cities.find((x) => x.city_slug === city)?.city;
+const h1 = `${c.name}${cityName ? ` à ${cityName}` : ` à ${CITY.area}`}`;
+const seo = seoFor('categorie', {
+  categorie: c.name, categorie_min: c.name.toLowerCase(), univers: u.name, univers_description: u.description,
+  ville: cityName ?? CITY.area, nombre: String(total), page: page > 1 ? `(page ${page})` : '',
+});
+const desc = seo.description;
+// Mises en avant sponsorisées de la catégorie (et de la ville filtrée), en première page seulement.
+const sponsored = page === 1 ? sponsorsFor({ category: c.slug, city: cityName ? city : '' }) : [];
+const qs = new URLSearchParams({ ...(cityName && { ville: city }), ...(page > 1 && { page: String(page) }) }).toString();
+// Introduction et FAQ (première page) : conseil propre au métier + données réelles de la catégorie.
+const content = categoryContent({ slug: c.slug, name: c.name, universe: u.slug, universeName: u.name, total, citySlug: cityName ? city : '', cityName, cities });
+const faq = page === 1 ? content.faq : [];
+const pageUrl = `${ENV.siteUrl}${Astro.url.pathname}${qs ? `?${qs}` : ''}`;
+const jsonLd = [
+  ...collectionGraph({ path: `${Astro.url.pathname}${qs ? `?${qs}` : ''}`, name: h1, description: desc, items: items.map(ficheItem), offset: (page - 1) * SITE.perPage }),
+  ...faqGraph(pageUrl, faq),
+];
+---
+<Base
+  title={seo.title}
+  description={desc}
+  seoVars={seo.vars}
+  jsonLd={jsonLd}
+  noindex={c.count === 0 || Boolean(city && !cityName)}
+  canonicalParams={['ville', 'page']}
+>
+  <div class="wrap">
+    <header class="page-head">
+      <Breadcrumb items={[{ name: 'Annuaire', href: '/annuaire' }, { name: u.name, href: universeUrl(u) }, { name: c.name }]} />
+      <h1>{c.name}{cityName && <> à {cityName}</>}</h1>
+      <p>{total.toLocaleString('fr-FR')} {total > 1 ? 'établissements' : 'établissement'} dans <a href={universeUrl(u)}>{u.name}</a></p>
+    </header>
+
+    {cities.length > 1 && (
+      <nav class="cityf" aria-label="Filtrer par ville">
+        <a href={Astro.url.pathname} aria-current={!city ? 'page' : undefined}>Toutes <span>{c.count}</span></a>
+        {cities.slice(0, 14).map((x) => <a href={`${Astro.url.pathname}?ville=${x.city_slug}`} aria-current={x.city_slug === city ? 'page' : undefined}>{x.city} <span>{x.n}</span></a>)}
+      </nav>
+    )}
+
+    {page === 1 && <div class="lead-box">{content.intro.map((p) => <p>{p}</p>)}</div>}
+
+    {sponsored.length > 0 && <ul class="list panel sponsored-list" aria-label="Mises en avant">{sponsored.map(({ s: sp, f }) => <FicheRow fiche={f} sponsored sponsorId={sp.id} />)}</ul>}
+    {items.length ? <ul class="list panel">{items.map((f) => <FicheRow fiche={f} />)}</ul> : <p class="panel muted">Aucune fiche pour l'instant.</p>}
+    <Pagination page={page} total={total} perPage={SITE.perPage} url={Astro.url} />
+
+    {page === 1 && <SeoContent content={{ ...content, faq }} title={`Questions fréquentes : ${c.name.toLowerCase()} ${cityName ? `à ${cityName}` : `à ${CITY.area}`}`} />}
+
+    <section class="siblings" aria-labelledby="t-siblings">
+      <h2 id="t-siblings">Autres catégories · {u.name}</h2>
+      <CategoryChips universe={u} categories={u.categories} current={c.slug} />
+    </section>
+    <UniverseList title="Autres univers" exclude={u.slug} />
+  </div>
+</Base>
+
+<style>
+  .page-head p a { color: var(--accent); font-weight: 600; }
+  .cityf { display: flex; flex-wrap: wrap; gap: .4rem; margin-bottom: 1rem; }
+  .cityf a { padding: .35rem .8rem; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); font-size: .86rem; font-weight: 500; }
+  .cityf a span { color: var(--muted); font-size: .76rem; }
+  .cityf a[aria-current] { background: var(--text); color: var(--bg); border-color: var(--text); }
+  .cityf a[aria-current] span { color: inherit; opacity: .7; }
+  .list { list-style: none; margin: 0; padding: .5rem; }
+  .siblings { margin-top: 3rem; }
+  .siblings h2 { font-size: 1.1rem; margin: 0 0 1rem; }
+  .sponsored-list { margin-bottom: 1rem; }
+</style>

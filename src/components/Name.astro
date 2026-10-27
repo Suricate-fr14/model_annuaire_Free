@@ -1,0 +1,11 @@
+---
+// Affiche le nom avec le badge collé au dernier mot (évite un badge orphelin en début de ligne).
+import Check from './Check.astro';
+
+interface Props { name: string; certified: boolean }
+const { name, certified } = Astro.props;
+const i = name.lastIndexOf(' ');
+const head = i > 0 ? name.slice(0, i + 1) : '';
+const last = i > 0 ? name.slice(i + 1) : name;
+---
+{certified ? <>{head}<span class="nowrap">{last}<Check /></span></> : name}

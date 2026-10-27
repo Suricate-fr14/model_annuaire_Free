@@ -1,0 +1,62 @@
+---
+import Base from '../../layouts/Base.astro';
+import AccountNav from '../../components/AccountNav.astro';
+import { SITE } from '../../config';
+import { fichesOfOwner } from '../../lib/fiches';
+import { leadsOfOwner, REQUEST_TYPES, TIMINGS, parisDate } from '../../lib/leads';
+import { phoneDisplay, phoneHref } from '../../lib/text';
+
+const user = Astro.locals.user!;
+const leads = leadsOfOwner(user.id);
+const premium = fichesOfOwner(user.id).filter((f) => f.premium);
+const active = premium.filter((f) => f.leads_enabled);
+---
+<Base title={`Mes demandes de contact | ${SITE.fullName}`} noindex>
+  <div class="wrap">
+    <h1>Demandes de contact</h1>
+    <AccountNav />
+    <p class="muted intro">
+      Demandes envoyées par les visiteurs depuis le formulaire « Demander un devis » de vos fiches Premium, vérifiées par notre équipe.
+      Chacune vous est aussi envoyée par email : répondez-y pour écrire directement au prospect.
+    </p>
+    {premium.length === 0 && (
+      <p class="panel">Le formulaire de demande de contact est inclus dans la formule <strong>Premium</strong>. <a href="/compte">Voir mes fiches et formules</a></p>
+    )}
+    {premium.length > 0 && active.length === 0 && (
+      <p class="panel">Le formulaire n'est activé sur aucune de vos fiches : cochez « J'achète des leads » dans la section 8 de votre fiche. <a href={`/compte/fiches/${premium[0].id}#s-premium`}>Activer sur {premium[0].name}</a></p>
+    )}
+    {leads.length === 0 ? (
+      active.length > 0 && <p class="panel muted">Aucune demande pour l'instant. Elles apparaîtront ici dès leur validation.</p>
+    ) : (
+      <ul class="list">
+        {leads.map((l) => (
+          <li class="panel lead">
+            <header>
+              <strong>{REQUEST_TYPES[l.request_type] ?? 'Demande'}</strong>
+              <span class="muted">· {l.fiche_name} · reçue le {parisDate(l.decided_at)}</span>
+              <span class="badge">{TIMINGS[l.timing] ?? ''}</span>
+            </header>
+            <p class="msg">{l.message}</p>
+            <p class="who">
+              <strong>{l.name}</strong>{l.postcode && <span class="muted"> ({l.postcode})</span>}
+              <a class="btn btn-sm gradient-bg" href={phoneHref(l.phone)}>{phoneDisplay(l.phone)}</a>
+              <a class="btn btn-sm btn-ghost" href={`mailto:${l.email}?subject=${encodeURIComponent(`Votre demande : ${l.fiche_name}`)}`}>{l.email}</a>
+            </p>
+          </li>
+        ))}
+      </ul>
+    )}
+  </div>
+</Base>
+
+<style>
+  .wrap { padding-top: 2rem; display: grid; gap: 1rem; }
+  h1 { margin: 0; }
+  .intro { margin: 0; max-width: 46rem; }
+  .list { list-style: none; margin: 0; padding: 0; display: grid; gap: .8rem; }
+  .lead { display: grid; gap: .7rem; }
+  .lead header { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; }
+  .msg { margin: 0; white-space: pre-wrap; line-height: 1.5; }
+  .who { margin: 0; display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
+  .panel a:not(.btn) { color: var(--accent); font-weight: 600; }
+</style>

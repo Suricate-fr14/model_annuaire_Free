@@ -1,0 +1,129 @@
+---
+import Base from '../layouts/Base.astro';
+import PlanCards from '../components/PlanCards.astro';
+import PromoBanner from '../components/PromoBanner.astro';
+import Icon from '../components/Icon.astro';
+import { SITE, PLANS, planLabel, euro, annualOfferLabel, CITY } from '../config';
+import { stats, fichesOfOwner } from '../lib/fiches';
+import { pricingGraph } from '../lib/schema';
+
+const s = stats();
+const user = Astro.locals.user;
+const publicHref = user && fichesOfOwner(user.id).length ? '/compte' : '/creer-ma-fiche';
+const P = PLANS.pro, X = PLANS.premium;
+const FAQ: [string, string][] = [
+  ["Pourquoi le site internet est-il réservé aux formules payantes ?",
+   "Le lien vers votre site, le plan d'accès et la présentation détaillée font d'une fiche une vraie page de présentation. Ils sont inclus dans Pro et Premium, qui financent la vérification et la mise à jour de l'annuaire."],
+  ["Ma fiche gratuite apparaît-elle sur Google ?",
+   "Non : elle est visible dans l'annuaire (recherche, catégories, villes), mais n'est pas proposée aux moteurs de recherche. Le référencement Google de la fiche est inclus dans les formules Pro et Premium, avec un title et une meta description que vous pouvez personnaliser."],
+  ["Pourquoi mon téléphone n'apparaît-il pas sur une fiche gratuite ?",
+   "Le téléphone et l'email sont affichés sur la fiche avec les formules Pro et Premium. Vous pouvez les renseigner dès maintenant dans votre fiche gratuite : ils apparaissent dès l'activation d'une formule."],
+  ["Quelle différence entre Pro et Premium ?",
+   "Les deux affichent votre téléphone, votre email, votre site, vos photos et vos statistiques. Premium vous place en tête de votre catégorie, devant les fiches Pro, vous met en avant en priorité sur l'accueil, et ajoute jusqu'à 4 vidéos YouTube et le formulaire « Demander un devis »."],
+  ["Comment fonctionne le formulaire « Demander un devis » ?",
+   "Avec Premium, cochez « J'achète des leads » dans votre fiche : un formulaire de demande apparaît sur votre fiche. Chaque demande est vérifiée par notre équipe (spam, coordonnées) puis vous est transmise par email et dans votre espace, avec le téléphone et l'email du prospect."],
+  ["Mon établissement est déjà dans l'annuaire, que faire ?",
+   "Revendiquez sa fiche depuis le bouton « Revendiquer » : après vérification, vous la gérez comme si vous l'aviez créée, puis vous pouvez choisir une formule."],
+  ["Puis-je changer de formule ou résilier ?",
+   "Oui, à tout moment depuis votre espace. La résiliation prend effet à la fin de la période payée ; le site internet et la galerie sont alors masqués, puis réaffichés si vous vous réabonnez."],
+  ["Facturez-vous la mise en avant à l'acte ?",
+   `Non : pas de frais d'inscription, pas de coût par clic. Un abonnement mensuel, ou annuel (${annualOfferLabel()}).`],
+];
+const jsonLd = pricingGraph(FAQ);
+const rows: [string, string | boolean, string | boolean, string | boolean][] = [
+  ['Adresse, horaires, réseaux sociaux', true, true, true],
+  ['Téléphone et email affichés sur la fiche', false, true, true],
+  ['Statut « ouvert maintenant » et lien itinéraire', true, true, true],
+  ['Logo, description courte et services', true, true, true],
+  ['Référencement de la fiche sur Google (title et description personnalisables)', false, true, true],
+  ['Bannière (image de couverture) en haut de la fiche', false, true, true],
+  ['Actualité ou offre du moment', false, true, true],
+  ['Fiche enrichie dans les listes (visuel, accroche, pastille)', false, false, true],
+  ['Lien vers votre site internet', false, true, true],
+  ["Plan d'accès Google Maps sur la fiche", false, true, true],
+  ['Présentation détaillée (jusqu’à 4 000 caractères)', false, true, true],
+  ['Badge « fiche certifiée »', false, true, true],
+  ['Galerie photos', false, `${P.photos} photos`, `${X.photos} photos`],
+  ['Vidéos YouTube', false, false, 'Jusqu’à 3'],
+  ['Formulaire « Demander un devis » (demandes vérifiées)', false, false, true],
+  ['Statistiques (vues, appels, itinéraires, clics)', 'Vues', true, '+ demandes de devis'],
+  ['Bilan mensuel par email', false, true, true],
+  ['Position dans votre catégorie et votre ville', 'Après les abonnés', 'Devant les gratuites', 'En tête de liste'],
+  ["Mise en avant « À découvrir aujourd'hui »", false, 'En rotation', 'Prioritaire'],
+  ['Assistance', 'Email', 'Email', 'Prioritaire'],
+];
+const cell = (v: string | boolean) => (v === true ? 'yes' : v === false ? 'no' : 'txt');
+---
+<Base
+  title={`Tarifs : fiche gratuite, Pro et Premium | ${SITE.fullName}`}
+  description={`Référencement gratuit à ${CITY.name}. Pro dès ${euro(P.year / 12)} HT/mois : site internet, badge, photos et statistiques. Premium : en tête de liste et mise en avant quotidienne.`}
+  jsonLd={jsonLd}
+>
+  <div class="wrap">
+    <header class="page-head center">
+      <h1>Choisissez votre visibilité à {CITY.name}</h1>
+      <p>Une fiche gratuite pour tous, deux formules pour aller plus loin. Sans engagement, résiliable en un clic.</p>
+    </header>
+
+    <PromoBanner />
+    <PlanCards mode="public" publicHref={publicHref} />
+
+    <p class="vat muted">Prix hors taxes (TVA 20 % en sus). Paiement sécurisé par carte via Stripe. En cas de résiliation, votre fiche reste en ligne gratuitement.</p>
+
+    <section class="compare panel" aria-labelledby="t-compare">
+      <h2 id="t-compare">Comparer les formules</h2>
+      <div class="table-wrap">
+        <table class="table">
+          <thead><tr><th></th><th>Gratuite</th><th>Pro</th><th>Premium</th></tr></thead>
+          <tbody>
+            {rows.map(([label, ...vals]) => (
+              <tr>
+                <th scope="row">{label}</th>
+                {vals.map((v) => (
+                  <td class={cell(v)}>
+                    {v === true ? <Icon name="check" size={18} label="Inclus" /> : v === false ? <span aria-label="Non inclus">—</span> : v}
+                  </td>
+                ))}
+              </tr>
+            ))}
+            <tr class="price-row"><th scope="row">Prix</th><td>0 €</td><td>{planLabel(P, 'month')}<br /><small>ou {planLabel(P, 'year')}</small></td><td>{planLabel(X, 'month')}<br /><small>ou {planLabel(X, 'year')}</small></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="why">
+      <div class="panel"><p class="big">{s.total.toLocaleString('fr-FR')}</p><p class="muted">établissements référencés à {CITY.area}</p></div>
+      <div class="panel"><p class="big">{s.cities.length}</p><p class="muted">communes couvertes</p></div>
+      <div class="panel"><p class="big">238</p><p class="muted">catégories, chacune avec sa page par ville</p></div>
+    </section>
+
+    <section class="faq prose" aria-labelledby="t-faq">
+      <h2 id="t-faq">Questions fréquentes</h2>
+      {FAQ.map(([q, a]) => <><h3>{q}</h3><p>{a}</p></>)}
+    </section>
+  </div>
+</Base>
+
+<style>
+  .center { text-align: center; }
+  .center p { margin: 0 auto; max-width: 40rem; }
+  .vat { text-align: center; font-size: .85rem; margin: 1.25rem 0 0; }
+  .compare { margin-top: 3rem; }
+  .compare h2 { margin: 0 0 1rem; font-size: 1.3rem; }
+  .compare .table th[scope='row'] { font-weight: 500; text-transform: none; letter-spacing: 0; font-size: .92rem; color: var(--text); background: none; white-space: normal; }
+  .compare td { text-align: center; vertical-align: middle; }
+  .compare thead th:not(:first-child) { text-align: center; font-size: .85rem; }
+  .compare .yes :global(svg) { color: #16a34a; }
+  .compare .no { color: var(--muted); }
+  .compare .txt { font-size: .86rem; font-weight: 600; }
+  .price-row td { font-weight: 800; }
+  .price-row small { font-weight: 500; color: var(--muted); }
+  .why { display: grid; gap: 1rem; margin-top: 2rem; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  @media (max-width: 700px) { .why { grid-template-columns: 1fr; } }
+  .why .panel { text-align: center; }
+  .big { margin: 0; font-size: 2rem; font-weight: 800; letter-spacing: -0.02em; }
+  .why p { margin: .2rem 0 0; }
+  .faq { margin: 3rem auto 0; }
+  .faq h3 { margin: 1.5rem 0 .3rem; font-size: 1.02rem; }
+</style>

@@ -1,0 +1,102 @@
+---
+import Base from '../../layouts/Base.astro';
+import Breadcrumb from '../../components/Breadcrumb.astro';
+import { SITE, CITY } from '../../config';
+import { universeCounts, stats } from '../../lib/fiches';
+import { universeUrl, categoryUrl } from '../../lib/taxonomy';
+import { collectionGraph } from '../../lib/schema';
+
+// Univers les plus fournis en premier ; dans chaque bloc, seules les catégories qui ont des fiches.
+const list = universeCounts().sort((a, b) => b.count - a.count);
+const totalCats = list.reduce((n, u) => n + u.categories.length, 0);
+const MAX = 8;
+const desc = `Parcourez ${list.length} univers et ${totalCats} catégories de professionnels à ${CITY.name} : bâtiment, santé, commerces, restaurants, services…`;
+const jsonLd = collectionGraph({ path: '/univers', name: "Toutes les catégories de l'annuaire", description: desc, items: list.filter((u) => u.count > 0).map((u) => ({ name: u.name, url: universeUrl(u) })) });
+---
+<Base
+  title={`Toutes les catégories de l'annuaire | ${SITE.fullName}`}
+  description={desc}
+  jsonLd={jsonLd}
+>
+  <div class="wrap">
+    <header class="page-head">
+      <Breadcrumb items={[{ name: 'Annuaire', href: '/annuaire' }, { name: 'Catégories' }]} />
+      <h1>Toutes les catégories<span class="dot">.</span></h1>
+      <p>{list.length} univers, {totalCats} catégories et {stats().total.toLocaleString('fr-FR')} fiches.</p>
+    </header>
+
+    <nav class="jump" aria-label="Aller à un univers">
+      {list.map((u) => <a href={`#${u.slug}`} style={`--h:${u.hue}`}><span class="d" aria-hidden="true"></span>{u.name}</a>)}
+    </nav>
+
+    <div class="masonry">
+      {list.map((u) => {
+        const filled = u.categories.filter((c) => c.count > 0).sort((a, b) => b.count - a.count);
+        const shown = filled.slice(0, MAX);
+        const rest = u.categories.length - shown.length;
+        return (
+          <section class="block" id={u.slug} style={`--h:${u.hue}`} aria-labelledby={`h-${u.slug}`}>
+            <a class="head" href={universeUrl(u)}>
+              <span class="mark" aria-hidden="true">{u.name.charAt(0)}</span>
+              <span class="ht">
+                <h2 id={`h-${u.slug}`}>{u.name}</h2>
+                <span class="hc">{u.count ? `${u.count.toLocaleString('fr-FR')} fiches` : 'Bientôt disponible'}</span>
+              </span>
+            </a>
+            {shown.length > 0 ? (
+              <ul>
+                {shown.map((c) => (
+                  <li><a href={categoryUrl(u, c)}><span>{c.name}</span><span class="n">{c.count}</span></a></li>
+                ))}
+              </ul>
+            ) : <p class="none">{u.description}</p>}
+            <a class="foot" href={universeUrl(u)}>
+              {rest > 0 ? `Voir l'univers · ${rest} autre${rest > 1 ? 's' : ''} catégorie${rest > 1 ? 's' : ''}` : "Voir l'univers"} →
+            </a>
+          </section>
+        );
+      })}
+    </div>
+  </div>
+</Base>
+
+<style>
+  .jump { display: flex; flex-wrap: wrap; gap: .4rem; }
+  .jump a {
+    display: inline-flex; align-items: center; gap: .45rem; padding: .35rem .8rem; border-radius: 999px;
+    background: var(--surface); border: 1px solid var(--line); font-size: .84rem; font-weight: 500;
+  }
+  .jump a:hover { border-color: hsl(var(--h) 60% 55%); }
+  .d { width: 8px; height: 8px; border-radius: 50%; background: hsl(var(--h) 65% 55%); }
+
+  .masonry { columns: 3 20rem; column-gap: 1rem; margin-top: 1.75rem; }
+  .block {
+    break-inside: avoid; margin-bottom: 1rem; display: flex; flex-direction: column;
+    border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow); overflow: hidden;
+    scroll-margin-top: calc(var(--header-h) + 1rem);
+  }
+  .head {
+    display: flex; align-items: center; gap: .8rem; padding: 1rem 1.1rem;
+    background: linear-gradient(135deg, hsl(var(--h) 75% 94%), var(--surface));
+    border-bottom: 1px solid var(--line);
+  }
+  .mark {
+    flex: none; display: grid; place-items: center; width: 40px; height: 40px; border-radius: 12px;
+    background: hsl(var(--h) 65% 55%); color: #fff; font-weight: 800; font-size: 1.1rem;
+  }
+  .ht { min-width: 0; }
+  h2 { margin: 0; font-size: 1.02rem; line-height: 1.25; }
+  .head:hover h2 { color: hsl(var(--h) 55% 38%); }
+  .hc { color: var(--muted); font-size: .8rem; font-weight: 500; }
+  ul { list-style: none; margin: 0; padding: .4rem .5rem; }
+  li a { display: flex; align-items: center; justify-content: space-between; gap: .75rem; padding: .45rem .6rem; border-radius: 9px; font-size: .92rem; }
+  li a:hover { background: hsl(var(--h) 70% 96%); color: hsl(var(--h) 55% 32%); }
+  .n {
+    flex: none; min-width: 2rem; padding: .05rem .5rem; border-radius: 999px; text-align: center;
+    background: var(--surface-2); color: var(--muted); font-size: .76rem; font-weight: 700;
+  }
+  li a:hover .n { background: hsl(var(--h) 70% 90%); color: inherit; }
+  .none { margin: 0; padding: .9rem 1.1rem; color: var(--muted); font-size: .88rem; }
+  .foot { padding: .7rem 1.1rem; border-top: 1px dashed var(--line); font-size: .84rem; font-weight: 600; color: var(--accent); }
+  .foot:hover { background: var(--surface-2); }
+</style>

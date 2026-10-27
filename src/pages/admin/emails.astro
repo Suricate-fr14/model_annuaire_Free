@@ -1,0 +1,97 @@
+---
+import Admin from '../../layouts/Admin.astro';
+import { ENV } from '../../config';
+import { all } from '../../lib/db';
+import { emailSamples } from '../../lib/emailSamples';
+import { sendMail } from '../../lib/mail';
+import { flash } from '../../lib/flash';
+
+// Envoi d'un modèle (ou de tous) à l'administrateur connecté, pour vérifier le rendu dans sa messagerie.
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const key = String(form.get('m') ?? '');
+  const me = Astro.locals.user!.email;
+  const list = emailSamples().filter((x) => key === 'tous' || x.key === key);
+  for (const x of list) await sendMail(me, `[Test] ${x.subject}`, x.content);
+  flash(Astro.cookies, list.length ? 'ok' : 'error', list.length
+    ? `${list.length} email${list.length > 1 ? 's' : ''} de test envoyé${list.length > 1 ? 's' : ''} à ${me}${ENV.resendKey ? '' : ' (RESEND_API_KEY absent : visibles dans l’onglet Envoyés seulement)'}.`
+    : 'Modèle introuvable.');
+  return Astro.redirect('/admin/emails?vue=modeles');
+}
+
+const tab = Astro.url.searchParams.get('vue') === 'modeles' ? 'modeles' : 'envoyes';
+const rows = tab === 'envoyes' ? all<any>('SELECT id, to_email, subject, body, html <> \'\' AS has_html, status, created_at FROM outbox ORDER BY id DESC LIMIT 100') : [];
+const samples = tab === 'modeles' ? emailSamples() : [];
+const groups = [...new Set(samples.map((s) => s.group))];
+---
+<Admin title="Emails">
+  <nav class="tabs">
+    <a href="/admin/emails" aria-current={tab === 'envoyes' ? 'page' : undefined}>Envoyés</a>
+    <a href="/admin/emails?vue=modeles" aria-current={tab === 'modeles' ? 'page' : undefined}>Modèles ({tab === 'modeles' ? samples.length : '…'})</a>
+  </nav>
+
+  {tab === 'envoyes' && (
+    <>
+      <p class="muted">
+        {ENV.resendKey
+          ? 'Les emails sont envoyés via Resend, en HTML et en texte. Historique des 100 derniers :'
+          : "Aucun service d'envoi configuré (RESEND_API_KEY) : les emails sont conservés ici. Les liens qu'ils contiennent (réinitialisation de mot de passe, etc.) sont utilisables."}
+      </p>
+      <div class="list">
+        {rows.map((m) => (
+          <details class="panel mail">
+            <summary>
+              <span class:list={['badge', m.status === 'sent' ? 'badge-ok' : m.status === 'stored' ? '' : 'badge-err']}>{m.status}</span>
+              <strong>{m.subject}</strong>
+              <span class="muted">→ {m.to_email} · {m.created_at}</span>
+            </summary>
+            {m.has_html ? <iframe src={`/admin/emails/apercu?id=${m.id}`} loading="lazy" title={m.subject}></iframe> : <pre>{m.body}</pre>}
+          </details>
+        ))}
+        {rows.length === 0 && <p class="panel muted">Aucun email pour l'instant.</p>}
+      </div>
+    </>
+  )}
+
+  {tab === 'modeles' && samples.length > 0 && (
+    <form method="post" class="send-all">
+      <p class="muted">Recevez un modèle dans votre messagerie ({Astro.locals.user!.email}) pour vérifier son rendu, par exemple dans Outlook.</p>
+      <button class="btn btn-ghost" name="m" value="tous" data-confirm={`Envoyer les ${samples.length} modèles à ${Astro.locals.user!.email} ?`}>M'envoyer tous les modèles ({samples.length})</button>
+    </form>
+  )}
+  {tab === 'modeles' && (
+    samples.length === 0
+      ? <p class="panel muted">Publiez au moins une fiche pour afficher les exemples.</p>
+      : groups.map((g) => (
+        <section class="group">
+          <h2>{g}</h2>
+          <div class="list">
+            {samples.filter((s) => s.group === g).map((s) => (
+              <details class="panel mail">
+                <summary><strong>{s.subject}</strong><span class="muted">· {s.when}</span>
+                  <form method="post" class="send-one"><button class="btn btn-ghost btn-sm" name="m" value={s.key}>M'envoyer un test</button></form>
+                </summary>
+                <iframe src={`/admin/emails/apercu?m=${s.key}`} loading="lazy" title={s.subject}></iframe>
+              </details>
+            ))}
+          </div>
+        </section>
+      ))
+  )}
+</Admin>
+
+<style>
+  .tabs { display: flex; gap: .4rem; margin: 0 0 1rem; }
+  .tabs a { padding: .45rem .9rem; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); font-weight: 600; font-size: .9rem; }
+  .tabs a[aria-current] { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .send-all { display: flex; flex-wrap: wrap; gap: .6rem 1rem; align-items: center; justify-content: space-between; margin: 0 0 .5rem; }
+  .send-all p { margin: 0; }
+  .send-one { margin-left: auto; }
+  .btn-sm { padding: .3rem .7rem; font-size: .82rem; }
+  .group h2 { margin: 1.4rem 0 .6rem; font-size: 1.05rem; }
+  .list { display: grid; gap: .5rem; }
+  .mail { padding: .9rem 1.1rem; }
+  summary { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; cursor: pointer; }
+  iframe { display: block; width: 100%; height: 760px; margin: .9rem 0 0; border: 1px solid var(--line); border-radius: 12px; background: #f5f0e8; }
+  pre { white-space: pre-wrap; word-break: break-word; margin: .9rem 0 0; padding: .9rem; border-radius: 10px; background: var(--surface-2); font-size: .88rem; font-family: inherit; }
+</style>

@@ -1,0 +1,35 @@
+{
+  "match": { "city_slugs": ["votre-ville"], "name_like": "%boulangerie dupont%" },
+  "owner_email": "",
+  "plan": "",
+  "days": 365,
+  "fiche": {
+    "name": "Boulangerie Dupont",
+    "kind": "organization",
+    "category": "boulangeries",
+    "short_desc": "Pains au levain, viennoiseries et pâtisseries maison, en centre-ville.",
+    "description": "Présentation de l'établissement, en quelques paragraphes séparés par une ligne vide.\n\nUniquement des informations vérifiées : produits, services, histoire, engagements.",
+    "street": "1 rue de la République",
+    "postcode": "00000",
+    "city": "Votre ville",
+    "phone": "",
+    "email": "",
+    "website": "",
+    "siret": "",
+    "hours": {
+      "mo": [],
+      "tu": [["07:00", "13:00"], ["15:00", "19:30"]],
+      "we": [["07:00", "13:00"], ["15:00", "19:30"]],
+      "th": [["07:00", "13:00"], ["15:00", "19:30"]],
+      "fr": [["07:00", "13:00"], ["15:00", "19:30"]],
+      "sa": [["07:00", "19:00"]],
+      "su": [["07:30", "12:30"]]
+    },
+    "hours_note": "",
+    "socials": {},
+    "features": ["emporter", "cb"],
+    "seo_title": "",
+    "seo_description": "",
+    "leads_enabled": false
+  }
+}

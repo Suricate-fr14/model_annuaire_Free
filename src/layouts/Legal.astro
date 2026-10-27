@@ -1,0 +1,45 @@
+---
+import Base from './Base.astro';
+import { SITE } from '../config';
+interface Props { title: string; description?: string; updated?: string; draft?: boolean }
+const { title, description, updated = '1er octobre 2026', draft = false } = Astro.props;
+const pages = [
+  { href: '/mentions-legales', label: 'Mentions légales' },
+  { href: '/cgu', label: "Conditions d'utilisation" },
+  { href: '/confidentialite', label: 'Confidentialité' },
+  { href: '/sources-et-donnees', label: 'Sources des données' },
+];
+const path = Astro.url.pathname;
+---
+<Base title={`${title} | ${SITE.fullName}`} description={description} pageType={/^(Mentions|Sources)/.test(title) ? 'AboutPage' : 'WebPage'}>
+  <div class="wrap legal-wrap">
+    <nav class="legal-nav" aria-label="Informations légales">
+      {pages.map((p) => <a href={p.href} aria-current={path === p.href ? 'page' : undefined}>{p.label}</a>)}
+    </nav>
+    <article class="prose legal">
+      <h1>{title}</h1>
+      <p class="updated">Dernière mise à jour : {updated}</p>
+      {draft && <p class="draft">Modèle à adapter : faites relire ce texte par un professionnel du droit avant la mise en ligne.</p>}
+      <slot />
+    </article>
+  </div>
+</Base>
+
+<style>
+  .legal-wrap { padding-top: 2rem; }
+  .legal-nav { display: flex; flex-wrap: wrap; gap: .4rem; margin-bottom: 1.5rem; }
+  .legal-nav a { padding: .4rem .85rem; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); font-size: .88rem; font-weight: 600; }
+  .legal-nav a:hover { border-color: var(--accent); }
+  .legal-nav a[aria-current] { background: var(--accent); border-color: var(--accent); color: #fff; }
+  h1 { font-size: clamp(1.8rem, 4vw, 2.4rem); letter-spacing: -0.02em; margin: 0; }
+  .updated { color: var(--muted); font-size: .88rem; margin: .4rem 0 0; }
+  .draft { padding: .7rem 1rem; border-radius: 12px; background: color-mix(in srgb, #f59e0b 18%, var(--surface)); font-size: .9rem; }
+  .legal :global(dl) { display: grid; grid-template-columns: minmax(9rem, auto) 1fr; gap: .45rem 1.25rem; margin: 1rem 0; padding: 1.1rem 1.25rem; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); }
+  .legal :global(dt) { font-weight: 700; }
+  .legal :global(dd) { margin: 0; overflow-wrap: anywhere; }
+  .legal :global(a) { color: var(--accent); font-weight: 600; }
+  .legal :global(table) { width: 100%; border-collapse: collapse; font-size: .92rem; margin: 1rem 0; }
+  .legal :global(th), .legal :global(td) { text-align: left; padding: .55rem .7rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+  .legal :global(th) { background: var(--surface-2); font-size: .82rem; }
+  @media (max-width: 560px) { .legal :global(dl) { grid-template-columns: 1fr; } .legal :global(dt) { margin-top: .4rem; } }
+</style>

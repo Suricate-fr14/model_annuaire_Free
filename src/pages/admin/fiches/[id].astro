@@ -1,0 +1,396 @@
+---
+import Admin from '../../../layouts/Admin.astro';
+import FicheForm from '../../../components/FicheForm.astro';
+import Avatar from '../../../components/Avatar.astro';
+import Icon from '../../../components/Icon.astro';
+import { ENV, SITE, PLANS } from '../../../config';
+import { getFiche, updateFiche, setStatus, deleteFiche, invalidateStats, isIndexable, setIndexMode } from '../../../lib/fiches';
+import { parseFicheForm } from '../../../lib/ficheForm';
+import { ficheTitle, ficheDescription } from '../../../lib/seo';
+import { categoryName } from '../../../lib/taxonomy';
+import { findUserByEmail } from '../../../lib/auth';
+import { send } from '../../../lib/mail';
+import { fichePublished, ficheRejected } from '../../../lib/emails';
+import { giveFormula, removeGift, giftActive } from '../../../lib/formula';
+import { intentFrom, withIntent, intentLabel } from '../../../lib/intent';
+import { removeImage } from '../../../lib/uploads';
+import { flash } from '../../../lib/flash';
+import { get, run, all, audit } from '../../../lib/db';
+import { leadStats } from '../../../lib/leads';
+import { getGoogleReviews, setGoogleQuery, parseGoogleQuery, refreshReviews, reviewsEnabled } from '../../../lib/googleReviews';
+
+const admin = Astro.locals.user!;
+const id = Number(Astro.params.id);
+const f = getFiche(id);
+const leads = f ? leadStats(f.id) : { total: 0, sent: 0 };
+if (!f) return new Response('Fiche introuvable', { status: 404 });
+const owner = f.owner_id ? get<{ id: number; email: string; name: string }>('SELECT id, email, name FROM users WHERE id = ?', f.owner_id) : null;
+const back = `/admin/fiches/${id}`;
+const wanted = f.certified ? null : intentFrom(f.wanted_plan, f.wanted_interval);
+
+let errors: string[] = [];
+let values: any = f;
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const action = String(form.get('_action') ?? 'save');
+  const tab = String(form.get('_tab') ?? '');
+
+  if (action === 'save') {
+    // L'admin peut tout modifier, quelle que soit la formule (site, présentation, photos, SEO, indexation).
+    const { data, errors: errs } = await parseFicheForm(form, { pro: true, premium: true, maxPhotos: PLANS.premium.photos, current: f });
+    errors = errs;
+    values = { ...f, ...data, index_mode: String(form.get('index_mode') ?? f.index_mode) };
+    if (!errors.length) {
+      updateFiche(id, data);
+      setIndexMode(id, String(form.get('index_mode') ?? f.index_mode));
+      audit(admin.id, 'admin.fiche.update', String(id));
+      flash(Astro.cookies, 'ok', 'Fiche enregistrée.');
+      return Astro.redirect(back);
+    }
+  } else {
+    if (action === 'approve') {
+      setStatus(id, 'published');
+      if (owner) await send(owner.email, fichePublished(owner.name, getFiche(id)!, wanted));
+      flash(Astro.cookies, 'ok', 'Fiche publiée.');
+    }
+    if (action === 'reject') {
+      const reason = String(form.get('reason') ?? '').trim().slice(0, 300) || 'Informations insuffisantes';
+      setStatus(id, 'rejected', reason);
+      if (owner) await send(owner.email, ficheRejected(owner.name, f, reason));
+      flash(Astro.cookies, 'info', 'Fiche refusée.');
+    }
+    if (action === 'unpublish') { setStatus(id, 'unpublished'); flash(Astro.cookies, 'info', 'Fiche dépubliée.'); }
+    if (action === 'delete') {
+      [f.logo, ...f.photos].filter(Boolean).forEach(removeImage);
+      deleteFiche(id);
+      audit(admin.id, 'admin.fiche.delete', `${id} ${f.name}`);
+      flash(Astro.cookies, 'info', `Fiche « ${f.name} » supprimée.`);
+      return Astro.redirect('/admin/fiches');
+    }
+    if (action === 'index') {
+      setIndexMode(id, String(form.get('index_mode')));
+      invalidateStats();
+      flash(Astro.cookies, 'ok', 'Indexation mise à jour.');
+    }
+    if (action === 'owner') {
+      const email = String(form.get('email') ?? '').trim();
+      if (!email) { run('UPDATE fiches SET owner_id = NULL WHERE id = ?', id); flash(Astro.cookies, 'info', 'Propriétaire retiré.'); }
+      else {
+        const u = findUserByEmail(email);
+        if (!u) { flash(Astro.cookies, 'error', `Aucun compte pour ${email}.`); return Astro.redirect(back + '#proprietaire'); }
+        run('UPDATE fiches SET owner_id = ? WHERE id = ?', u.id, id);
+        flash(Astro.cookies, 'ok', `Fiche attribuée à ${u.email}.`);
+      }
+    }
+    // Formule offerte (lib/formula.ts) : s'ajoute à l'abonnement éventuel, sans le modifier ; à la fin, la fiche
+    // reprend sa formule payée ou redevient gratuite.
+    if (action === 'pro') {
+      const mode = String(form.get('mode'));
+      const plan = form.get('plan') === 'premium' ? 'premium' : 'pro';
+      if (mode === 'grant') {
+        const forever = form.get('duration') === 'forever';
+        const days = Math.min(3650, Math.max(1, Number(form.get('days')) || 30));
+        const until = forever ? null : new Date(Date.now() + days * 864e5).toISOString();
+        await giveFormula(id, plan, until);
+        flash(Astro.cookies, 'ok', `Formule ${plan === 'premium' ? 'Premium' : 'Pro'} offerte ${forever ? 'sans limite de durée' : `pour ${days} jours`}.`);
+      }
+      if (mode === 'revoke') {
+        await removeGift(id);
+        flash(Astro.cookies, 'ok', 'Formule offerte retirée : la fiche reprend sa formule payée (ou redevient gratuite).');
+      }
+    }
+    // Avis Google (DataForSEO) : établissement suivi, mise à jour immédiate en arrière-plan.
+    if (action === 'google') {
+      const query = String(form.get('google_query') ?? '').trim().slice(0, 500);
+      if (query && !parseGoogleQuery(query)) {
+        flash(Astro.cookies, 'error', 'Non reconnu : collez le lien complet de la fiche Google Maps (barre d\'adresse, pas le lien court « Partager » ni un Plus Code), le CID, le place_id ou le nom exact de l\'établissement.');
+        return Astro.redirect(back + '#avis');
+      }
+      setGoogleQuery(id, query);
+      if (query && form.get('refresh') === '1' && !f.certified) {
+        flash(Astro.cookies, 'info', 'Établissement Google enregistré. Fiche gratuite : les avis seront récupérés et affichés dès le passage en Pro ou Premium.');
+      } else if (query && form.get('refresh') === '1' && reviewsEnabled()) {
+        refreshReviews(id).catch((e) => run('UPDATE google_reviews SET status = ?, task_id = \'\' WHERE fiche_id = ?', `Erreur : ${(e as Error).message}`, id));
+        flash(Astro.cookies, 'ok', 'Récupération des avis lancée : rechargez la page dans une à deux minutes.');
+      } else {
+        flash(Astro.cookies, 'ok', query ? 'Établissement Google enregistré.' : 'Avis Google retirés de la fiche.');
+      }
+    }
+    audit(admin.id, `admin.fiche.${action}`, String(id));
+    return Astro.redirect(back + (tab ? `#${tab}` : ''));
+  }
+}
+
+const indexable = isIndexable(f);
+const reports = all<any>('SELECT * FROM reports WHERE fiche_id = ? ORDER BY created_at DESC LIMIT 10', id);
+const claims = all<any>('SELECT c.*, u.email FROM claims c JOIN users u ON u.id = c.user_id WHERE c.fiche_id = ? ORDER BY c.created_at DESC LIMIT 10', id);
+const invoices = all<any>('SELECT * FROM billing_invoices WHERE fiche_id = ? ORDER BY paid_at DESC LIMIT 12', id);
+const history = all<any>(`SELECT a.action, a.created_at, u.email FROM audit a LEFT JOIN users u ON u.id = a.user_id WHERE a.target = ? OR a.target LIKE ? ORDER BY a.id DESC LIMIT 25`, String(id), `${id} %`);
+const paris = (d: string) => new Date(d.replace(' ', 'T') + 'Z').toLocaleString('fr-FR', { timeZone: SITE.timezone, dateStyle: 'short', timeStyle: 'short' });
+const STATUS: Record<string, [string, string]> = { published: ['chip-ok', 'Publiée'], pending: ['chip-warn', 'En attente de validation'], rejected: ['chip-err', 'Refusée'], unpublished: ['chip-off', 'Dépubliée'] };
+const tabs = [
+  { id: 'contenu', label: 'Contenu & SEO', icon: 'edit' },
+  { id: 'moderation', label: 'Modération', icon: 'check' },
+  { id: 'proprietaire', label: 'Propriétaire', icon: 'user' },
+  { id: 'formule', label: 'Formule', icon: 'star' },
+  { id: 'avis', label: 'Avis Google', icon: 'star' },
+  { id: 'activite', label: 'Activité', icon: 'history' },
+];
+const greviews = getGoogleReviews(id);
+const sourceLabel = f.source === 'osm' ? `Import OpenStreetMap (${f.source_ref})` : f.source === 'admin' ? 'Créée par un administrateur' : 'Créée par un professionnel';
+---
+<Admin title={f.name} subtitle={`${categoryName(f.category)} · ${f.city}`} wide>
+  <section class="panel hero">
+    <Avatar name={f.name} src={f.logo} size={64} />
+    <div class="hero-txt">
+      <div class="chips">
+        <span class:list={['chip', STATUS[f.status][0]]}>{STATUS[f.status][1]}</span>
+        {f.certified ? <span class:list={['chip', f.premium ? 'chip-prem' : 'chip-pro']}>{f.premium ? 'Premium' : 'Pro'}</span> : <span class="chip chip-off">Gratuite</span>}
+        <span class:list={['chip', indexable ? 'chip-ok' : 'chip-off']}><Icon name="google" size={12} /> {indexable ? 'Indexée' : 'Non indexée'}{f.index_mode !== 'auto' && ' (forcé)'}</span>
+        {wanted && <span class="chip chip-warn">Souhaite : {intentLabel(wanted)}</span>}
+      </div>
+      <p class="muted src">{sourceLabel} · créée le {f.created_at.slice(0, 10)} · modifiée le {f.updated_at.slice(0, 10)}{owner && <> · propriétaire <a href={`mailto:${owner.email}`}>{owner.email}</a></>}</p>
+    </div>
+    <ul class="stats">
+      <li><strong>{f.views}</strong><span>vues</span></li>
+      <li><strong>{f.clicks_phone}</strong><span>appels</span></li>
+      <li><strong>{f.clicks_route}</strong><span>itinéraires</span></li>
+      <li><strong>{f.clicks_web}</strong><span>clics site</span></li>
+      {!f.certified && <li><strong>{f.clicks_phone_locked}</strong><span>numéro demandé (masqué)</span></li>}
+      <li><a href="/admin/demandes?statut=tous"><strong>{leads.total}</strong><span>{leads.total > 1 ? 'demandes' : 'demande'} ({leads.sent} {leads.sent > 1 ? 'transmises' : 'transmise'})</span></a></li>
+    </ul>
+    <div class="hero-act">
+      <a class="btn btn-ghost" href={`/${f.slug}`} target="_blank"><Icon name="external" size={16} /> Voir la fiche</a>
+      {f.status !== 'published' && <form method="post"><input type="hidden" name="_tab" value="moderation" /><button class="btn gradient-bg" name="_action" value="approve">Publier</button></form>}
+    </div>
+  </section>
+
+  <nav class="tabs" role="tablist" aria-label="Sections de la fiche">
+    {tabs.map((t, i) => <a href={`#${t.id}`} role="tab" data-tab={t.id} aria-selected={i === 0 ? 'true' : 'false'}><Icon name={t.icon} size={15} /> {t.label}</a>)}
+  </nav>
+
+  <div class="layout">
+    <div class="panes">
+      <section class="pane" id="contenu" data-pane>
+        <FicheForm values={values} pro={true} premium={true} maxPhotos={PLANS.premium.photos} ficheId={f.id} errors={errors} submitLabel="Enregistrer la fiche" admin indexable={indexable} />
+      </section>
+
+      <section class="pane panel box" id="moderation" data-pane hidden>
+        <h2>Modération</h2>
+        {f.status === 'rejected' && f.reject_reason && <p class="note">Motif actuel du refus : {f.reject_reason}</p>}
+        <div class="acts">
+          {f.status !== 'published'
+            ? <form method="post"><input type="hidden" name="_tab" value="moderation" /><button class="btn gradient-bg" name="_action" value="approve"><Icon name="check" size={16} /> Publier la fiche</button></form>
+            : <form method="post"><input type="hidden" name="_tab" value="moderation" /><button class="btn btn-ghost" name="_action" value="unpublish">Dépublier</button></form>}
+        </div>
+        <form method="post" class="stack">
+          <input type="hidden" name="_tab" value="moderation" />
+          <label class="field"><span>Refuser avec un motif (envoyé au propriétaire)</span><input class="input" name="reason" placeholder="Ex. adresse introuvable, doublon…" /></label>
+          <div><button class="btn btn-ghost" name="_action" value="reject">Refuser</button></div>
+        </form>
+        <hr />
+        <form method="post" class="stack">
+          <input type="hidden" name="_tab" value="moderation" />
+          <h3>Indexation Google</h3>
+          <p class="muted">Automatique : la fiche est indexée tant qu'elle a une formule Pro ou Premium. Vous pouvez forcer l'un ou l'autre.</p>
+          <select name="index_mode" class="sel">
+            <option value="auto" selected={f.index_mode === 'auto'}>Automatique (selon la formule)</option>
+            <option value="index" selected={f.index_mode === 'index'}>Toujours indexer</option>
+            <option value="noindex" selected={f.index_mode === 'noindex'}>Ne pas indexer</option>
+          </select>
+          <div><button class="btn btn-ghost" name="_action" value="index">Enregistrer l'indexation</button></div>
+        </form>
+        <hr />
+        <form method="post" class="danger">
+          <div><h3>Supprimer la fiche</h3><p class="muted">Suppression définitive, images comprises.</p></div>
+          <button class="btn btn-danger" name="_action" value="delete" data-confirm="Supprimer définitivement cette fiche ?"><Icon name="trash" size={16} /> Supprimer</button>
+        </form>
+      </section>
+
+      <section class="pane panel box" id="proprietaire" data-pane hidden>
+        <h2>Propriétaire</h2>
+        <p>{owner ? <>{owner.name} · <a href={`mailto:${owner.email}`}>{owner.email}</a> · <a href={`/admin/utilisateurs?q=${encodeURIComponent(owner.email)}`}>voir le compte</a></> : <span class="muted">Fiche non revendiquée.</span>}</p>
+        <form method="post" class="inline">
+          <input type="hidden" name="_tab" value="proprietaire" />
+          <input class="input" name="email" type="email" placeholder="Email d'un compte existant (vide = retirer)" value={owner?.email ?? ''} />
+          <button class="btn btn-ghost" name="_action" value="owner">Attribuer</button>
+        </form>
+        {claims.length > 0 && (
+          <>
+            <h3>Revendications</h3>
+            <table class="mini"><tbody>{claims.map((c) => <tr><td>{c.email}</td><td>{c.role}</td><td><span class:list={['chip', c.status === 'approved' ? 'chip-ok' : c.status === 'pending' ? 'chip-warn' : 'chip-err']}>{c.status}</span></td><td class="muted">{c.created_at.slice(0, 10)}</td></tr>)}</tbody></table>
+          </>
+        )}
+      </section>
+
+      <section class="pane panel box" id="formule" data-pane hidden>
+        <h2>Formule</h2>
+        <dl class="dl">
+          <dt>Formule</dt><dd>{f.certified ? (f.premium ? 'Premium' : 'Pro') : 'Gratuite'}</dd>
+          <dt>État</dt><dd>{f.pro_status}</dd>
+          <dt>Périodicité</dt><dd>{f.pro_interval ? (f.pro_interval === 'year' ? 'Annuelle' : 'Mensuelle') : '—'}</dd>
+          <dt>Échéance</dt><dd>{f.pro_until?.slice(0, 10) ?? '—'}</dd>
+          <dt>Stripe</dt><dd>{f.stripe_subscription || '—'}</dd>
+          <dt>Formule payée</dt><dd>{f.paid_status !== 'none' && f.paid_plan ? `${f.paid_plan === 'premium' ? 'Premium' : 'Pro'} (${f.paid_status})` : 'Aucune'}</dd>
+        </dl>
+        {f.stripe_subscription && <p class="note">Abonnement Stripe : les changements de formule payés et les résiliations se font dans Stripe (le webhook met la fiche à jour). Une formule offerte ci-dessous s'y ajoute sans modifier l'abonnement.</p>}
+        <h3>Formule offerte</h3>
+        {giftActive(f)
+          ? <p class="gift-on"><span class:list={['chip', f.gift_plan === 'premium' ? 'chip-prem' : 'chip-pro']}>{f.gift_plan === 'premium' ? 'Premium' : 'Pro'} offert</span> {f.gift_until ? `jusqu'au ${new Date(f.gift_until).toLocaleDateString('fr-FR')}` : 'sans limite de durée'}</p>
+          : <p class="muted">Aucune. Offrez Pro ou Premium à n'importe quelle fiche, pour un essai ou sans limite : à la fin, la fiche reprend sa formule payée ou redevient gratuite.</p>}
+        <form method="post" class="inline">
+          <input type="hidden" name="_action" value="pro" /><input type="hidden" name="_tab" value="formule" />
+          <select name="plan" class="sel"><option value="pro">Pro</option><option value="premium" selected>Premium</option></select>
+          <select name="duration" class="sel" data-duration><option value="days">pendant</option><option value="forever">sans limite</option></select>
+          <span data-days-wrap><input class="input days" name="days" type="number" min="1" max="3650" value="30" aria-label="Durée en jours" /> <span class="muted">jours</span></span>
+          <button class="btn btn-ghost" name="mode" value="grant">{giftActive(f) ? 'Modifier' : 'Offrir'}</button>
+          {giftActive(f) && <button class="btn btn-ghost" name="mode" value="revoke" data-confirm="Retirer la formule offerte ? (n'annule pas un abonnement Stripe)">Retirer le cadeau</button>}
+        </form>
+        <script>
+          for (const sel of document.querySelectorAll<HTMLSelectElement>('[data-duration]')) {
+            const wrap = sel.parentElement?.querySelector<HTMLElement>('[data-days-wrap]');
+            const sync = () => { if (wrap) wrap.hidden = sel.value === 'forever'; };
+            sel.addEventListener('change', sync); sync();
+          }
+        </script>
+        {invoices.length > 0 && (
+          <>
+            <h3>Paiements</h3>
+            <table class="mini"><tbody>{invoices.map((b) => <tr><td>{b.paid_at}</td><td>{b.plan} {b.interval}</td><td class="r">{(b.amount_ttc_cents / 100).toFixed(2)} € TTC</td><td>{b.axonaut_url ? <a href={b.axonaut_url} target="_blank">{b.axonaut_number}</a> : <span class="chip">{b.status}</span>}</td></tr>)}</tbody></table>
+          </>
+        )}
+      </section>
+
+      <section class="pane panel box" id="avis" data-pane hidden>
+        <h2>Avis Google</h2>
+        {!reviewsEnabled() && <p class="note">Renseignez <code>DATAFORSEO_LOGIN</code> et <code>DATAFORSEO_PASSWORD</code> dans le <code>.env</code> pour récupérer les avis.</p>}
+        <p class="muted">Collez le lien de la fiche Google Maps de l'établissement (ou son CID, son place_id, à défaut son nom et sa ville). Les derniers avis avec un commentaire, quelle que soit leur note, s'affichent sur la fiche : 4 en Pro, 8 en Premium, aucun en gratuit ; mise à jour automatique une fois par mois (<code>npm run -s avis:google</code>).</p>
+        {!f.certified && <p class="note">Fiche gratuite : les avis Google ne sont ni récupérés ni affichés.</p>}
+        <form method="post" class="stack">
+          <input type="hidden" name="_action" value="google" /><input type="hidden" name="_tab" value="avis" />
+          <input class="input" name="google_query" value={greviews?.query ?? ''} placeholder="https://www.google.com/maps/place/…" />
+          <div class="inline">
+            <button class="btn gradient-bg" name="refresh" value="1">Enregistrer et récupérer les avis</button>
+            <button class="btn btn-ghost" name="refresh" value="0">Enregistrer seulement</button>
+          </div>
+        </form>
+        {greviews && (
+          <dl class="dl">
+            <dt>État</dt><dd>{greviews.status === 'ok' ? 'À jour' : greviews.status === 'pending' ? 'Récupération en cours…' : greviews.status || 'Jamais récupérés'}</dd>
+            <dt>Note Google</dt><dd>{greviews.rating != null ? `${greviews.rating.toLocaleString('fr-FR')} / 5 (${greviews.count} avis)` : '—'}</dd>
+            <dt>Avis affichés</dt><dd>{greviews.reviews.length}</dd>
+            <dt>Dernière mise à jour</dt><dd>{greviews.fetched_at ? paris(greviews.fetched_at) : '—'}</dd>
+          </dl>
+        )}
+      </section>
+
+      <section class="pane panel box" id="activite" data-pane hidden>
+        <h2>Activité</h2>
+        {reports.length > 0 && (
+          <>
+            <h3>Signalements</h3>
+            <table class="mini"><tbody>{reports.map((r) => <tr><td><strong>{r.reason}</strong></td><td>{r.message}</td><td><span class:list={['chip', r.status === 'open' ? 'chip-warn' : 'chip-ok']}>{r.status}</span></td><td class="muted">{r.created_at.slice(0, 10)}</td></tr>)}</tbody></table>
+          </>
+        )}
+        <h3>Historique</h3>
+        {history.length ? (
+          <table class="mini"><tbody>{history.map((h) => <tr><td class="muted nowrap">{paris(h.created_at)}</td><td><code>{h.action}</code></td><td class="r">{h.email ?? 'système'}</td></tr>)}</tbody></table>
+        ) : <p class="muted">Aucune action enregistrée.</p>}
+      </section>
+    </div>
+
+    <aside class="aside">
+      <section class="panel box">
+        <div class="card-h"><h2>Aperçu Google</h2><span class:list={['chip', indexable ? 'chip-ok' : 'chip-off']}>{indexable ? 'Indexée' : 'Noindex'}</span></div>
+        <div class="serp">
+          <p class="u">{ENV.siteUrl.replace(/^https?:\/\//, '')}/{f.slug}</p>
+          <p class="t">{ficheTitle(f)}</p>
+          <p class="d">{ficheDescription(f)}</p>
+        </div>
+        <p class="muted hint">{f.seo_title || f.seo_description ? 'Title ou description personnalisés.' : 'Title et description générés automatiquement.'} Modifiables dans « Contenu & SEO », section 8.</p>
+      </section>
+      <section class="panel box">
+        <h2 class="h">Liens utiles</h2>
+        <ul class="links">
+          <li><a href={`/${f.slug}`} target="_blank">Fiche publique</a></li>
+          <li><a href={`/compte/fiches/${f.id}/abonnement`}>Page formule du pro</a></li>
+          {f.source === 'osm' && <li><a href={`https://www.openstreetmap.org/${f.source_ref}`} target="_blank" rel="noopener">Objet OpenStreetMap</a></li>}
+        </ul>
+      </section>
+    </aside>
+  </div>
+</Admin>
+
+<script>
+  // Onglets : l'onglet courant suit l'ancre de l'URL (#moderation…), le formulaire de contenu reste en mémoire.
+  const tabs = [...document.querySelectorAll<HTMLAnchorElement>('[data-tab]')];
+  const panes = [...document.querySelectorAll<HTMLElement>('[data-pane]')];
+  const show = (id: string) => {
+    if (!panes.some((p) => p.id === id)) id = 'contenu';
+    panes.forEach((p) => (p.hidden = p.id !== id));
+    tabs.forEach((t) => t.setAttribute('aria-selected', String(t.dataset.tab === id)));
+  };
+  tabs.forEach((t) => t.addEventListener('click', (e) => { e.preventDefault(); history.replaceState(null, '', `#${t.dataset.tab}`); show(t.dataset.tab!); }));
+  // Une erreur de validation renvoie sur le contenu ; sinon on respecte l'ancre.
+  show(document.querySelector('.errors') ? 'contenu' : location.hash.slice(1));
+</script>
+
+<style>
+  [data-days-wrap]:not([hidden]) { display: inline-flex; align-items: center; gap: .35rem; }
+  .gift-on { display: flex; align-items: center; gap: .5rem; margin: .2rem 0 .6rem; }
+  .hero { display: flex; flex-wrap: wrap; align-items: center; gap: 1rem 1.25rem; padding: 1.1rem 1.25rem; margin-bottom: 1rem; }
+  .hero-txt { flex: 1 1 18rem; min-width: 0; }
+  .chips { display: flex; flex-wrap: wrap; gap: .35rem; }
+  .src { margin: .45rem 0 0; font-size: .84rem; }
+  .src a { color: var(--accent); }
+  .stats { list-style: none; display: flex; gap: .4rem; margin: 0; padding: 0; }
+  .stats li { display: flex; flex-direction: column; align-items: center; min-width: 4.6rem; padding: .45rem .6rem; border-radius: 10px; background: #f7f8fc; }
+  .stats strong { font-size: 1.15rem; }
+  .stats span { font-size: .72rem; color: #667085; }
+  .hero-act { display: flex; gap: .5rem; flex-wrap: wrap; }
+  .hero-act .btn { display: inline-flex; gap: .4rem; }
+  .tabs { display: flex; gap: .25rem; overflow-x: auto; margin-bottom: 1rem; border-bottom: 1px solid #e6e7ef; }
+  .tabs a { display: inline-flex; align-items: center; gap: .4rem; padding: .65rem .95rem; font-weight: 600; font-size: .9rem; color: #667085; border-bottom: 2px solid transparent; margin-bottom: -1px; white-space: nowrap; }
+  .tabs a:hover { color: var(--text); }
+  .tabs a[aria-selected='true'] { color: var(--accent); border-bottom-color: var(--accent); }
+  .layout { display: grid; grid-template-columns: minmax(0, 1fr) 21rem; gap: 1rem; align-items: start; }
+  .layout > * { min-width: 0; }
+  @media (max-width: 1200px) { .layout { grid-template-columns: minmax(0, 1fr); } }
+  .pane[hidden] { display: none; }
+  .box { padding: 1.2rem 1.3rem; }
+  .box h2, .h { margin: 0 0 1rem; font-size: 1.05rem; }
+  .box h3 { margin: 1.25rem 0 .6rem; font-size: .95rem; }
+  .box hr { border: 0; border-top: 1px solid #eef0f5; margin: 1.25rem 0; }
+  .acts { display: flex; gap: .5rem; margin-bottom: 1rem; }
+  .acts .btn { display: inline-flex; gap: .4rem; }
+  .stack { display: grid; gap: .6rem; }
+  .stack p { margin: 0; }
+  .inline { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
+  .inline .input { flex: 1 1 16rem; }
+  .inline .days { flex: 0 0 6rem; }
+  .danger { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 1rem; }
+  .danger h3 { margin: 0 0 .2rem; }
+  .danger p { margin: 0; }
+  .danger .btn { display: inline-flex; gap: .4rem; }
+  .note { padding: .65rem .9rem; border-radius: 10px; background: #fffaeb; color: #93370d; font-size: .9rem; }
+  .dl { display: grid; grid-template-columns: 9rem 1fr; gap: .45rem 1rem; margin: 0 0 1rem; font-size: .92rem; }
+  .dl dt { color: #667085; }
+  .dl dd { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
+  .mini { width: 100%; border-collapse: collapse; font-size: .88rem; }
+  .mini td { padding: .5rem .3rem; border-bottom: 1px solid #f0f1f5; }
+  .mini tr:last-child td { border-bottom: 0; }
+  .mini a { color: var(--accent); font-weight: 600; }
+  .mini code { font-size: .8rem; background: #f2f4f7; padding: .1rem .35rem; border-radius: 5px; }
+  .r { text-align: right; }
+  .nowrap { white-space: nowrap; }
+  .aside { display: grid; gap: 1rem; position: sticky; top: 5rem; }
+  .serp { padding: .9rem 1rem; border: 1px solid #eef0f5; border-radius: 10px; font-family: Arial, sans-serif; }
+  .serp p { margin: 0; }
+  .serp .u { color: #202124; font-size: .8rem; overflow-wrap: anywhere; }
+  .serp .t { color: #1a0dab; font-size: 1.05rem; line-height: 1.3; margin-top: .2rem; }
+  .serp .d { color: #4d5156; font-size: .84rem; line-height: 1.45; margin-top: .2rem; }
+  .hint { font-size: .8rem; margin: .7rem 0 0; }
+  .links { list-style: none; margin: 0; padding: 0; display: grid; gap: .45rem; font-size: .9rem; }
+  .links a { color: var(--accent); font-weight: 600; }
+</style>

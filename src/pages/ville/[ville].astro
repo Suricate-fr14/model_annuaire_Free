@@ -1,0 +1,68 @@
+---
+import Base from '../../layouts/Base.astro';
+import Breadcrumb from '../../components/Breadcrumb.astro';
+import FicheRow from '../../components/FicheRow.astro';
+import Pagination from '../../components/Pagination.astro';
+import { SITE, ENV } from '../../config';
+import { listFiches, stats } from '../../lib/fiches';
+import { universes, categoryName, categoryUrlBySlug } from '../../lib/taxonomy';
+import { all } from '../../lib/db';
+import { collectionGraph, ficheItem } from '../../lib/schema';
+import { seoFor } from '../../lib/seoTemplates';
+import { sponsorsFor } from '../../lib/sponsors';
+import { cityContent, faqGraph } from '../../lib/pageContent';
+import SeoContent from '../../components/SeoContent.astro';
+
+const slug = Astro.params.ville ?? '';
+const city = stats().cities.find((c) => c.city_slug === slug);
+if (!city) return new Response(null, { status: 404 });
+
+const uni = universes.find((u) => u.slug === Astro.url.searchParams.get('univers'));
+const universe = uni?.slug ?? '';
+const page = Math.max(1, Number(Astro.url.searchParams.get('page')) || 1);
+const { items, total } = listFiches({ city: slug, universe, limit: SITE.perPage, offset: (page - 1) * SITE.perPage });
+const topCats = all<{ category: string; n: number }>(
+  "SELECT category, COUNT(*) AS n FROM fiches WHERE status = 'published' AND city_slug = ? GROUP BY category ORDER BY n DESC LIMIT 16", slug,
+);
+const seo = seoFor('ville', { ville: city.city, nombre: String(city.n), page: page > 1 ? `(page ${page})` : '' });
+// Filtre par domaine (?univers=) : titre, H1 et description propres ; page non indexée (liste courte, déjà couverte
+// par la page de la ville et par les pages catégories filtrées par commune).
+const h1 = uni ? `${uni.name} à ${city.city}` : `Entreprises et commerces à ${city.city}`;
+const title = uni ? `${uni.name} à ${city.city} : ${total} ${total > 1 ? 'adresses' : 'adresse'}${page > 1 ? ` (page ${page})` : ''}` : seo.title;
+const desc = uni ? `${uni.name} à ${city.city} : ${total} ${total > 1 ? 'professionnels' : 'professionnel'} avec horaires d'ouverture, adresses et itinéraires.` : seo.description;
+const sponsored = page === 1 && !universe ? sponsorsFor({ city: slug }) : [];
+const content = page === 1 && !universe ? cityContent(city) : { intro: [], faq: [] };
+const jsonLd = [
+  ...collectionGraph({
+    path: `${Astro.url.pathname}${page > 1 ? `?page=${page}` : ''}`, name: h1, description: desc,
+    items: items.map(ficheItem), offset: (page - 1) * SITE.perPage,
+  }),
+  ...faqGraph(`${ENV.siteUrl}${Astro.url.pathname}`, content.faq),
+];
+---
+<Base title={title} description={desc} seoVars={seo.vars} jsonLd={jsonLd} noindex={Boolean(uni)} canonicalParams={uni ? ['univers', 'page'] : ['page']}>
+  <div class="wrap">
+    <header class="page-head">
+      <Breadcrumb items={[{ name: 'Annuaire', href: '/annuaire' }, { name: 'Villes', href: '/villes' }, ...(uni ? [{ name: city.city, href: `/ville/${slug}` }, { name: uni.name }] : [{ name: city.city }])]} />
+      <h1>{h1}</h1>
+      <p>{city.n.toLocaleString('fr-FR')} fiches. Catégories les plus représentées :</p>
+    </header>
+    <nav class="cats" aria-label={`Catégories à ${city.city}`}>
+      {topCats.map((c) => <a href={`${categoryUrlBySlug(c.category)}?ville=${slug}`}>{categoryName(c.category)} <span>{c.n}</span></a>)}
+    </nav>
+    {content.intro.length > 0 && <div class="lead-box">{content.intro.map((p) => <p>{p}</p>)}</div>}
+    {sponsored.length > 0 && <ul class="list panel sponsored-list" aria-label="Mises en avant">{sponsored.map(({ s: sp, f }) => <FicheRow fiche={f} sponsored sponsorId={sp.id} />)}</ul>}
+    <ul class="list panel">{items.map((f) => <FicheRow fiche={f} />)}</ul>
+    <Pagination page={page} total={total} perPage={SITE.perPage} url={Astro.url} />
+    <SeoContent content={content} title={`Questions fréquentes : ${city.city}`} linksTitle={`Communes voisines de ${city.city}`} />
+  </div>
+</Base>
+
+<style>
+  .cats { display: flex; flex-wrap: wrap; gap: .4rem; margin-bottom: 1.25rem; }
+  .cats a { padding: .35rem .8rem; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); font-size: .86rem; font-weight: 500; }
+  .cats a:hover { border-color: var(--accent); }
+  .cats span { color: var(--muted); font-size: .76rem; }
+  .list { list-style: none; margin: 0; padding: .5rem; }
+  .sponsored-list { margin-bottom: 1rem; }
+</style>

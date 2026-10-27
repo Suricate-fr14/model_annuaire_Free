@@ -1,0 +1,106 @@
+---
+import Base from '../../layouts/Base.astro';
+import Breadcrumb from '../../components/Breadcrumb.astro';
+import CategoryChips from '../../components/CategoryChips.astro';
+import FicheCard from '../../components/FicheCard.astro';
+import UniverseList from '../../components/UniverseList.astro';
+import { universeCounts, listFiches } from '../../lib/fiches';
+import { categoryUrl, universeUrl as universeUrlOf } from '../../lib/taxonomy';
+import { collectionGraph } from '../../lib/schema';
+import { seoFor } from '../../lib/seoTemplates';
+import { universeContent, faqGraph } from '../../lib/pageContent';
+import SeoContent from '../../components/SeoContent.astro';
+import { ENV, CITY } from '../../config';
+
+const u = universeCounts().find((x) => x.slug === Astro.params.universe);
+if (!u) return new Response(null, { status: 404 });
+const filled = u.categories.filter((c) => c.count > 0).sort((a, b) => b.count - a.count);
+const PER = 8;
+const seo = seoFor('univers', { univers: u.name, univers_description: u.description, nombre: String(u.count) });
+const content = universeContent(u);
+const jsonLd = [
+  ...collectionGraph({
+    path: universeUrlOf(u), name: `${u.name} à ${CITY.name}`, description: u.description,
+    items: filled.map((c) => ({ name: c.name, url: categoryUrl(u, c) })),
+  }),
+  ...faqGraph(`${ENV.siteUrl}${universeUrlOf(u)}`, content.faq),
+];
+---
+<Base title={seo.title} description={seo.description} seoVars={seo.vars} noindex={u.count === 0} jsonLd={jsonLd}>
+  <div class="wrap" style={`--h:${u.hue}`}>
+    <div class="crumbs"><Breadcrumb items={[{ name: 'Annuaire', href: '/annuaire' }, { name: 'Catégories', href: '/univers' }, { name: u.name }]} /></div>
+
+    <header class="hero">
+      <span class="mark" aria-hidden="true">{u.name.charAt(0)}</span>
+      <div>
+        <h1>{u.name}</h1>
+        <p class="desc">{u.description}</p>
+        <p class="stats">
+          <span><strong>{u.count.toLocaleString('fr-FR')}</strong> fiches</span>
+          <span><strong>{filled.length}</strong> catégories actives</span>
+        </p>
+      </div>
+    </header>
+
+    {content.intro.length > 0 && <div class="lead-box">{content.intro.map((p) => <p>{p}</p>)}</div>}
+
+    <section class="cats" aria-labelledby="t-cats">
+      <h2 id="t-cats" class="sr-only">Catégories</h2>
+      <CategoryChips universe={u} categories={u.categories} />
+    </section>
+
+    {filled.map((c) => {
+      const { items } = listFiches({ category: c.slug, limit: PER });
+      return (
+        <section class="section" aria-labelledby={`t-${c.slug}`}>
+          <div class="sh">
+            <h2 id={`t-${c.slug}`}><a href={categoryUrl(u, c)}>{c.name}</a> <span class="n">{c.count}</span></h2>
+            {c.count > PER && <a class="more" href={categoryUrl(u, c)}>Voir les {c.count} →</a>}
+          </div>
+          <ul class="cards">{items.map((f) => <li><FicheCard fiche={f} /></li>)}</ul>
+        </section>
+      );
+    })}
+
+    {u.count === 0 && (
+      <div class="empty panel">
+        <p class="t">Aucune fiche dans cet univers pour l'instant.</p>
+        <p class="muted">Vous exercez dans ce domaine ? Soyez le premier référencé, c'est gratuit.</p>
+        <a href="/creer-ma-fiche" class="btn gradient-bg">Créer ma fiche</a>
+      </div>
+    )}
+
+    <SeoContent content={content} title={`Questions fréquentes : ${u.name.toLowerCase()} à ${CITY.area}`} />
+    <UniverseList title="Autres univers" exclude={u.slug} />
+  </div>
+</Base>
+
+<style>
+  .crumbs { padding-top: 1.75rem; }
+  .hero {
+    display: flex; gap: 1.25rem; align-items: flex-start; margin-top: 1rem; padding: 1.75rem;
+    border-radius: 22px; border: 1px solid hsl(var(--h) 50% 85%);
+    background: linear-gradient(135deg, hsl(var(--h) 75% 94%), var(--surface) 70%);
+  }
+  .mark {
+    flex: none; display: grid; place-items: center; width: 64px; height: 64px; border-radius: 18px;
+    background: hsl(var(--h) 65% 55%); color: #fff; font-size: 1.8rem; font-weight: 800;
+    box-shadow: 0 10px 24px -10px hsl(var(--h) 65% 40%);
+  }
+  h1 { margin: 0; font-size: clamp(1.8rem, 4.5vw, 2.6rem); letter-spacing: -0.03em; line-height: 1.1; }
+  .desc { margin: .5rem 0 0; color: var(--muted); font-size: 1.05rem; max-width: 46rem; }
+  .stats { display: flex; flex-wrap: wrap; gap: .5rem; margin: 1rem 0 0; }
+  .stats span { padding: .3rem .8rem; border-radius: 999px; background: var(--surface); border: 1px solid var(--line); font-size: .88rem; color: var(--muted); }
+  .stats strong { color: var(--text); }
+  @media (max-width: 560px) { .hero { flex-direction: column; padding: 1.25rem; } .mark { width: 52px; height: 52px; font-size: 1.4rem; } }
+  .cats { margin-top: 1.5rem; }
+  .section { margin-top: 2.75rem; }
+  .sh { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; margin-bottom: 1rem; padding-bottom: .6rem; border-bottom: 1px solid var(--line); }
+  .sh h2 { margin: 0; font-size: 1.25rem; display: flex; align-items: baseline; gap: .5rem; }
+  .sh h2 a:hover { color: var(--accent); }
+  .n { padding: .1rem .55rem; border-radius: 999px; background: hsl(var(--h) 70% 92%); color: hsl(var(--h) 55% 35%); font-size: .78rem; font-weight: 700; }
+  .more { color: var(--accent); font-weight: 600; font-size: .9rem; white-space: nowrap; }
+  .empty { margin-top: 2rem; text-align: center; padding: 2.5rem 1rem; }
+  .t { font-weight: 700; font-size: 1.1rem; margin: 0; }
+  .lead-box { margin-top: 1.2rem; }
+</style>

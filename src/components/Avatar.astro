@@ -1,0 +1,29 @@
+---
+// Photo si fournie, sinon initiales sur une couleur dérivée du nom.
+interface Props { name: string; src?: string; size?: number }
+const { name, src, size = 44 } = Astro.props;
+// Mots significatifs (sans « le », « la », « de »…) ; un seul mot → ses deux premiers caractères.
+const words = name.split(/[\s'’-]+/).map((w) => w.replace(/[^\p{L}\d]/gu, '')).filter(Boolean);
+const meaningful = words.filter((w) => !/^(le|la|les|l|de|du|des|d|et|au|aux|chez|the)$/i.test(w));
+const pick = meaningful.length ? meaningful : words;
+const initials = (pick.length > 1 ? pick[0][0] + pick[1][0] : (pick[0] ?? '?').slice(0, 2)).toUpperCase();
+let h = 0;
+for (const c of name) h = (h * 31 + c.charCodeAt(0)) % 360;
+---
+{src ? (
+  <img class="avatar" src={src} alt="" width={size} height={size} loading="lazy" style={`--s:${size}px`} />
+) : (
+  <span class="avatar initials" aria-hidden="true" style={`--s:${size}px;--h:${h}`}>{initials}</span>
+)}
+
+<style>
+  .avatar {
+    width: var(--s); height: var(--s); flex: none;
+    border-radius: 50%; object-fit: cover;
+  }
+  .initials {
+    display: inline-grid; place-items: center;
+    font-weight: 700; font-size: calc(var(--s) * 0.38); letter-spacing: -0.02em;
+    color: hsl(var(--h) 55% 28%); background: hsl(var(--h) 70% 88%);
+  }
+</style>

@@ -1,0 +1,37 @@
+{
+  "name": "annuaire",
+  "type": "module",
+  "version": "0.2.0",
+  "private": true,
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "build:n0c": "sh scripts/build-n0c.sh",
+    "start": "node --env-file-if-exists=.env ./dist/server/entry.mjs",
+    "preview": "astro preview",
+    "db:seed": "node --no-warnings --env-file-if-exists=.env scripts/seed.ts",
+    "db:import": "node --no-warnings --env-file-if-exists=.env scripts/import-osm.ts",
+    "db:villes": "node --no-warnings --env-file-if-exists=.env scripts/normalize-cities.ts",
+    "db:backup": "node --no-warnings --env-file-if-exists=.env scripts/backup.ts",
+    "db:descriptions": "node --no-warnings --env-file-if-exists=.env scripts/regenerer-descriptions.ts",
+    "db:fiche": "node --no-warnings --env-file-if-exists=.env scripts/creer-fiche.ts",
+    "actualites": "node --no-warnings --env-file-if-exists=.env scripts/actualites.ts",
+    "bilan:mensuel": "node --no-warnings --env-file-if-exists=.env scripts/bilan-mensuel.ts",
+    "images:optimiser": "node --no-warnings --env-file-if-exists=.env scripts/optimiser-images.ts",
+    "avis:google": "node --no-warnings --env-file-if-exists=.env scripts/avis-google.ts",
+    "emails:relances": "node --no-warnings --env-file-if-exists=.env scripts/relances.ts",
+    "billing:retry": "node --no-warnings --env-file-if-exists=.env scripts/billing-retry.ts",
+    "stripe:setup": "node --no-warnings --env-file-if-exists=.env scripts/stripe-setup.ts",
+    "stripe:promo": "node --no-warnings --env-file-if-exists=.env scripts/stripe-promo.ts",
+    "setup": "npm run db:import && npm run db:seed"
+  },
+  "dependencies": {
+    "@astrojs/node": "^11.1.6",
+    "astro": "^7.3.5",
+    "sharp": "^0.35.5",
+    "simple-icons": "^16.33.0"
+  }
+}

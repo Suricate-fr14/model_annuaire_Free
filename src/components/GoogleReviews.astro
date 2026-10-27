@@ -1,0 +1,107 @@
+---
+// Bloc « Avis Google » d'une fiche (données : lib/googleReviews, récupérées via DataForSEO).
+// En-tête centré (appréciation, étoiles, nombre d'avis, Google, « Laisser un avis ») puis cartes d'avis par rangées
+// de 4 (4 avis en Pro, 8 en Premium) : jamais d'emplacement vide.
+import type { GoogleReviews } from '../lib/googleReviews';
+import { ratingLabel, timeAgo, SHOWN } from '../lib/googleReviews';
+import { SITE } from '../config';
+
+interface Props { data: GoogleReviews; name: string; /** Avis affichés au plus (4 en Pro, 8 en Premium). */ max?: number }
+const { data: g, name, max = SHOWN } = Astro.props;
+const rating = g.rating ?? 0;
+// Rangées complètes de 4 (8, 4) ; moins de 4 avis : tous.
+const n = g.reviews.length >= max && max >= 8 ? 8 : g.reviews.length >= 4 ? 4 : g.reviews.length;
+const reviews = g.reviews.slice(0, n);
+// Date de la dernière mise à jour (fetched_at : « AAAA-MM-JJ HH:MM:SS » en UTC).
+const updated = g.fetched_at ? new Date(`${g.fetched_at.replace(' ', 'T')}Z`).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric', timeZone: SITE.timezone }) : '';
+const fmt = (r: number) => r.toLocaleString('fr-FR', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+const STAR = 'M12 2.5l2.9 6.1 6.6.8-4.9 4.6 1.3 6.6L12 17.3l-5.9 3.3 1.3-6.6-4.9-4.6 6.6-.8z';
+const COLORS = ['#7c3aed', '#2563eb', '#0891b2', '#059669', '#d97706', '#dc2626', '#db2777', '#4f46e5'];
+const colorOf = (s: string) => COLORS[[...s].reduce((a, c) => a + c.charCodeAt(0), 0) % COLORS.length];
+---
+<section class="panel greviews" id="avis" aria-labelledby="t-avis">
+  <div class="g-head">
+    <h2 id="t-avis">{ratingLabel(rating)}</h2>
+    <span class="stars lg" role="img" aria-label={`Note Google : ${fmt(rating)} sur 5`}>
+      <span class="s-bg">{[0, 1, 2, 3, 4].map(() => <svg viewBox="0 0 24 24"><path d={STAR} /></svg>)}</span>
+      <span class="s-fg" style={`width:${(rating / 5) * 100}%`}>{[0, 1, 2, 3, 4].map(() => <svg viewBox="0 0 24 24"><path d={STAR} /></svg>)}</span>
+    </span>
+    <p class="g-count"><strong>{fmt(rating)}</strong> sur 5 · basé sur {g.count.toLocaleString('fr-FR')} avis</p>
+    <p class="g-logo" aria-label="Google"><span>G</span><span>o</span><span>o</span><span>g</span><span>l</span><span>e</span></p>
+  </div>
+
+  {reviews.length > 0 && (
+    <ul class:list={['g-grid', `n${Math.min(n, 4)}`]}>
+      {reviews.map((r) => (
+        <li class="g-card">
+          <div class="g-author">
+            {r.avatar
+              ? <img src={r.avatar} alt="" width="40" height="40" loading="lazy" />
+              : <span class="g-initial" style={`background:${colorOf(r.name)}`}>{r.name.trim().charAt(0).toUpperCase()}</span>}
+            <div>
+              <p class="g-name">{r.name}</p>
+              {r.date && <p class="g-date">{timeAgo(r.date)}</p>}
+            </div>
+          </div>
+          <span class="stars" role="img" aria-label={`${r.rating} sur 5`}>
+            <span class="s-bg">{[0, 1, 2, 3, 4].map(() => <svg viewBox="0 0 24 24"><path d={STAR} /></svg>)}</span>
+            <span class="s-fg" style={`width:${(r.rating / 5) * 100}%`}>{[0, 1, 2, 3, 4].map(() => <svg viewBox="0 0 24 24"><path d={STAR} /></svg>)}</span>
+          </span>
+          <p class="g-text">{r.text}</p>
+          {r.answer && <p class="g-answer"><strong>Réponse de {name}</strong> {r.answer}</p>}
+        </li>
+      ))}
+    </ul>
+  )}
+
+  <div class="g-foot">
+    <p class="g-tag">Les derniers avis de leurs clients, sur Google.{updated && ` Mis à jour le ${updated}.`}</p>
+  </div>
+</section>
+
+<style>
+  .greviews { margin-top: 1.25rem; }
+  .g-head { display: flex; flex-direction: column; align-items: center; text-align: center; gap: .35rem; padding: .4rem 0 1.4rem; }
+  .g-head h2 { margin: 0; font-size: 1.5rem; }
+  .g-count { margin: 0; color: var(--muted); font-size: .9rem; }
+  .g-count strong { color: var(--text); }
+  .g-logo { margin: .1rem 0 .3rem; font: 600 1.9rem/1 'Product Sans', Inter, system-ui, sans-serif; letter-spacing: -.02em; }
+  .g-logo span:nth-child(1), .g-logo span:nth-child(4) { color: #4285f4; }
+  .g-logo span:nth-child(2), .g-logo span:nth-child(6) { color: #ea4335; }
+  .g-logo span:nth-child(3) { color: #fbbc05; }
+  .g-logo span:nth-child(5) { color: #34a853; }
+
+  .stars { position: relative; display: inline-flex; line-height: 0; }
+  .stars svg { width: 18px; height: 18px; flex: none; }
+  .stars.lg svg { width: 24px; height: 24px; }
+  /* Largeur des étoiles = 5 étoiles (sinon la carte l'étire et la note partielle paraît pleine). */
+  .g-card .stars { align-self: flex-start; }
+  .s-bg svg { fill: #e2dccf; }
+  .s-fg { position: absolute; inset: 0 auto 0 0; overflow: hidden; white-space: nowrap; display: inline-flex; }
+  .s-fg svg { fill: #f59e0b; }
+
+  .g-grid { list-style: none; margin: 0; padding: 0; display: grid; gap: 1rem; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .g-grid.n1 { grid-template-columns: minmax(0, 1fr); }
+  .g-grid.n2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .g-grid.n3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .g-card { display: flex; flex-direction: column; gap: .55rem; padding: 1rem 1.05rem 1.1rem; border-radius: 14px; background: var(--bg); border: 1px solid var(--line); }
+  .g-author { display: flex; align-items: center; gap: .65rem; min-width: 0; }
+  .g-author img, .g-initial { width: 40px; height: 40px; border-radius: 50%; flex: none; object-fit: cover; }
+  .g-initial { display: grid; place-items: center; color: #fff; font-weight: 700; font-size: 1.05rem; }
+  .g-author div { min-width: 0; }
+  .g-name { margin: 0; font-weight: 700; font-size: .92rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .g-date { margin: 0; color: var(--muted); font-size: .78rem; }
+  .g-text { margin: 0; font-size: .9rem; line-height: 1.55; display: -webkit-box; -webkit-line-clamp: 6; -webkit-box-orient: vertical; overflow: hidden; }
+  .g-answer { margin: 0; padding: .55rem .7rem; border-radius: 10px; background: var(--surface); font-size: .82rem; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+  .g-answer strong { display: block; color: var(--text); font-size: .78rem; }
+
+  .g-foot { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: .6rem 1rem; margin-top: 1rem; }
+  .g-tag { margin: 0; flex: 1 1 18rem; color: var(--muted); font-size: .92rem; font-weight: 500; font-style: italic; }
+
+  /* 8 ou 4 avis : 2 par ligne ; 3 avis : sur une ligne puis empilés (jamais d'emplacement vide). */
+  @media (max-width: 1100px) { .g-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (max-width: 760px) { .g-grid.n3 { grid-template-columns: minmax(0, 1fr); } }
+  @media (max-width: 560px) {
+    .g-grid, .g-grid.n2, .g-grid.n3 { grid-template-columns: minmax(0, 1fr); }
+  }
+</style>

@@ -1,0 +1,138 @@
+---
+import Admin from '../../layouts/Admin.astro';
+import Icon from '../../components/Icon.astro';
+import { all, get, run, audit } from '../../lib/db';
+import { flash } from '../../lib/flash';
+import { stats } from '../../lib/fiches';
+import { universes, categoryName, categoryExists } from '../../lib/taxonomy';
+import { sponsorshipStatus, type Sponsorship } from '../../lib/sponsors';
+
+const me = Astro.locals.user!;
+const today = new Date().toISOString().slice(0, 10);
+const plusDays = (n: number) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
+const cities = stats().cities;
+const cityName = (slug: string) => cities.find((c) => c.city_slug === slug)?.city ?? slug;
+
+let errors: string[] = [];
+let v = { fiche: '', category: '', city: '', starts_on: today, ends_on: plusDays(30), price_ht: '', note: '' };
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const action = form.get('_action');
+  if (action === 'create') {
+    v = {
+      fiche: String(form.get('fiche') ?? '').trim(), category: String(form.get('category') ?? ''), city: String(form.get('city') ?? ''),
+      starts_on: String(form.get('starts_on') ?? ''), ends_on: String(form.get('ends_on') ?? ''),
+      price_ht: String(form.get('price_ht') ?? '').replace(',', '.'), note: String(form.get('note') ?? '').trim().slice(0, 200),
+    };
+    // Fiche : identifiant, adresse de la fiche (/slug) ou slug.
+    const ref = v.fiche.replace(/^https?:\/\/[^/]+/, '').replace(/^\//, '');
+    const f = /^\d+$/.test(ref) ? get<{ id: number; status: string }>('SELECT id, status FROM fiches WHERE id = ?', Number(ref))
+      : get<{ id: number; status: string }>('SELECT id, status FROM fiches WHERE slug = ?', ref);
+    if (!f) errors.push('Fiche introuvable : indiquez son adresse (ex. /boulangerie-dupont) ou son numéro.');
+    else if (f.status !== 'published') errors.push("La fiche n'est pas publiée.");
+    if (v.category && !categoryExists(v.category)) errors.push('Catégorie inconnue.');
+    if (v.city && !cities.some((c) => c.city_slug === v.city)) errors.push('Ville inconnue.');
+    if (!v.category && !v.city) errors.push('Choisissez une catégorie, une ville, ou les deux.');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(v.starts_on) || !/^\d{4}-\d{2}-\d{2}$/.test(v.ends_on) || v.ends_on < v.starts_on) errors.push('Période invalide.');
+    const price = Number(v.price_ht || 0);
+    if (!Number.isFinite(price) || price < 0) errors.push('Prix invalide.');
+    if (!errors.length && f) {
+      const r = run('INSERT INTO sponsorships (fiche_id, category, city_slug, starts_on, ends_on, price_ht, note) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        f.id, v.category, v.city, v.starts_on, v.ends_on, price, v.note);
+      audit(me.id, 'sponsor.create', String(r.lastInsertRowid));
+      flash(Astro.cookies, 'ok', 'Mise en avant créée.');
+      return Astro.redirect('/admin/mises-en-avant');
+    }
+  } else {
+    const id = Number(form.get('id'));
+    if (action === 'stop') { run('UPDATE sponsorships SET ends_on = ? WHERE id = ? AND ends_on >= ?', plusDays(-1), id, today); flash(Astro.cookies, 'ok', 'Mise en avant arrêtée.'); }
+    if (action === 'delete') { run('DELETE FROM sponsorships WHERE id = ?', id); flash(Astro.cookies, 'ok', 'Mise en avant supprimée.'); }
+    audit(me.id, `sponsor.${action}`, String(id));
+    return Astro.redirect('/admin/mises-en-avant');
+  }
+}
+
+const rows = all<Sponsorship & { name: string; slug: string }>(
+  `SELECT s.*, f.name, f.slug FROM sponsorships s JOIN fiches f ON f.id = s.fiche_id ORDER BY s.ends_on < ? , s.starts_on DESC LIMIT 300`, today);
+const LABEL = { active: ['badge-ok', 'En cours'], upcoming: ['badge-warn', 'À venir'], past: ['', 'Terminée'] } as const;
+const where = (s: Sponsorship) => [s.category && categoryName(s.category), s.city_slug && cityName(s.city_slug)].filter(Boolean).join(' · ') || '—';
+---
+<Admin title="Mises en avant" subtitle="Emplacements sponsorisés en tête d'une catégorie ou d'une ville">
+  <form method="post" class="panel create">
+    <input type="hidden" name="_action" value="create" />
+    <h2>Nouvelle mise en avant</h2>
+    <p class="muted">
+      La fiche apparaît dans un encadré « Sponsorisé », au-dessus de la liste de la catégorie choisie (sur toutes ses villes, ou seulement
+      la ville choisie) ou de la page de la ville. Deux mises en avant au plus par emplacement, en alternance. La facturation se fait à part
+      (devis ou facture Axonaut) : le prix sert de mémo.
+    </p>
+    {errors.length > 0 && <div class="errs" role="alert"><ul>{errors.map((e) => <li>{e}</li>)}</ul></div>}
+    <div class="grid">
+      <label class="field full"><span>Fiche *</span><input name="fiche" value={v.fiche} required placeholder="Adresse de la fiche (ex. /boulangerie-dupont) ou numéro" /></label>
+      <label class="field">
+        <span>Catégorie</span>
+        <select name="category">
+          <option value="">— Toutes (page de la ville) —</option>
+          {universes.map((u) => <optgroup label={u.name}>{u.categories.map((c) => <option value={c.slug} selected={v.category === c.slug}>{c.name}</option>)}</optgroup>)}
+        </select>
+      </label>
+      <label class="field">
+        <span>Ville</span>
+        <select name="city">
+          <option value="">— Toutes les villes —</option>
+          {cities.map((c) => <option value={c.city_slug} selected={v.city === c.city_slug}>{c.city} ({c.n})</option>)}
+        </select>
+      </label>
+      <label class="field"><span>Du *</span><input type="date" name="starts_on" value={v.starts_on} required /></label>
+      <label class="field"><span>Au * <small>(inclus)</small></span><input type="date" name="ends_on" value={v.ends_on} required /></label>
+      <label class="field"><span>Prix HT <small>(mémo)</small></span><input name="price_ht" inputmode="decimal" value={v.price_ht} placeholder="Ex. 49" /></label>
+      <label class="field"><span>Note</span><input name="note" maxlength="200" value={v.note} placeholder="Client, devis, facture…" /></label>
+    </div>
+    <div class="acts"><button class="btn gradient-bg"><Icon name="star" size={16} /> Créer la mise en avant</button></div>
+  </form>
+
+  <div class="table-wrap">
+    <table class="table">
+      <thead><tr><th>État</th><th>Fiche</th><th>Emplacement</th><th>Période</th><th class="r">Affichages</th><th class="r">Clics</th><th class="r">Prix HT</th><th></th></tr></thead>
+      <tbody>
+        {rows.map((s) => {
+          const st = sponsorshipStatus(s);
+          return (
+            <tr>
+              <td><span class:list={['badge', LABEL[st][0]]}>{LABEL[st][1]}</span></td>
+              <td><a href={`/admin/fiches/${s.fiche_id}`}>{s.name}</a>{s.note && <><br /><small class="muted">{s.note}</small></>}</td>
+              <td>{where(s)}</td>
+              <td class="nowrap">{s.starts_on} → {s.ends_on}</td>
+              <td class="r">{s.impressions.toLocaleString('fr-FR')}</td>
+              <td class="r">{s.clicks}{s.impressions > 0 && <small class="muted"> ({((s.clicks / s.impressions) * 100).toFixed(1)} %)</small>}</td>
+              <td class="r">{s.price_ht ? `${s.price_ht.toLocaleString('fr-FR')} €` : '—'}</td>
+              <td class="acts-cell">
+                <form method="post">
+                  <input type="hidden" name="id" value={s.id} />
+                  {st !== 'past' && <button class="btn btn-ghost btn-sm" name="_action" value="stop">Arrêter</button>}
+                  <button class="btn btn-ghost btn-sm" name="_action" value="delete" data-confirm="Supprimer cette mise en avant et ses statistiques ?"><Icon name="trash" size={14} /></button>
+                </form>
+              </td>
+            </tr>
+          );
+        })}
+        {rows.length === 0 && <tr><td colspan="8" class="muted">Aucune mise en avant pour l'instant.</td></tr>}
+      </tbody>
+    </table>
+  </div>
+</Admin>
+
+<style>
+  .create { display: grid; gap: .9rem; margin-bottom: 1.2rem; }
+  .create h2 { margin: 0; font-size: 1.1rem; }
+  .create p { margin: 0; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: .9rem; }
+  .grid .full { grid-column: 1 / -1; }
+  .acts { display: flex; justify-content: flex-end; }
+  .errs { padding: .7rem 1rem; border-radius: 10px; background: color-mix(in srgb, #dc2626 12%, var(--surface)); color: #991b1b; }
+  .errs ul { margin: 0; padding-left: 1.1rem; }
+  .r { text-align: right; }
+  .nowrap { white-space: nowrap; }
+  .acts-cell form { display: flex; gap: .3rem; justify-content: flex-end; }
+</style>

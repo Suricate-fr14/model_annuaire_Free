@@ -1,0 +1,89 @@
+---
+import Admin from '../../layouts/Admin.astro';
+import { ENV } from '../../config';
+import { all, get, run, tx, audit } from '../../lib/db';
+import { send } from '../../lib/mail';
+import { claimApproved, claimRejected } from '../../lib/emails';
+import { flash } from '../../lib/flash';
+import { intentFrom, withIntent, intentLabel } from '../../lib/intent';
+
+const admin = Astro.locals.user!;
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const id = Number(form.get('id'));
+  const action = form.get('_action');
+  const c = get<any>(`SELECT c.*, f.name, f.slug, f.owner_id, u.email, u.name AS user_name FROM claims c JOIN fiches f ON f.id = c.fiche_id JOIN users u ON u.id = c.user_id WHERE c.id = ?`, id);
+  if (c && c.status === 'pending') {
+    if (action === 'approve') {
+      tx(() => {
+        run("UPDATE claims SET status = 'approved', decided_at = datetime('now') WHERE id = ?", id);
+        run('UPDATE fiches SET owner_id = ? WHERE id = ?', c.user_id, c.fiche_id);
+        if (c.wanted_plan) run('UPDATE fiches SET wanted_plan = ?, wanted_interval = ? WHERE id = ?', c.wanted_plan, c.wanted_interval, c.fiche_id);
+        // Les autres demandes sur la même fiche sont refusées.
+        run("UPDATE claims SET status = 'rejected', decided_at = datetime('now') WHERE fiche_id = ? AND id <> ? AND status = 'pending'", c.fiche_id, id);
+      });
+      const wanted = intentFrom(c.wanted_plan, c.wanted_interval);
+      await send(c.email, claimApproved(c.user_name, c, wanted));
+      flash(Astro.cookies, 'ok', `Revendication acceptée : ${c.name} attribuée à ${c.email}.`);
+    } else if (action === 'reject') {
+      run("UPDATE claims SET status = 'rejected', decided_at = datetime('now') WHERE id = ?", id);
+      await send(c.email, claimRejected(c.user_name, c));
+      flash(Astro.cookies, 'info', 'Revendication refusée.');
+    }
+    audit(admin.id, `claim.${action}`, String(id));
+  }
+  return Astro.redirect('/admin/revendications');
+}
+
+const pending = all<any>(`SELECT c.*, f.name, f.slug, f.phone AS fiche_phone, f.city, f.owner_id, u.email, u.name AS user_name, u.created_at AS user_created
+  FROM claims c JOIN fiches f ON f.id = c.fiche_id JOIN users u ON u.id = c.user_id WHERE c.status = 'pending' ORDER BY c.created_at`);
+const done = all<any>(`SELECT c.*, f.name, f.slug, u.email FROM claims c JOIN fiches f ON f.id = c.fiche_id JOIN users u ON u.id = c.user_id
+  WHERE c.status <> 'pending' ORDER BY c.decided_at DESC LIMIT 20`);
+---
+<Admin title="Revendications">
+  {pending.length === 0 && <p class="panel muted">Aucune demande en attente.</p>}
+  <div class="list">
+    {pending.map((c) => (
+      <article class="panel claim" id={`c${c.id}`}>
+        <div>
+          <h2><a href={`/${c.slug}`} target="_blank">{c.name}</a> <span class="muted">· {c.city}</span></h2>
+          <p><strong>{c.user_name}</strong> ({c.email}) · {c.role} · tél. {c.phone}</p>
+          {c.wanted_plan && <p><span class="badge badge-pro">Formule souhaitée : {intentLabel(intentFrom(c.wanted_plan, c.wanted_interval)!)}</span></p>}
+          <p class="muted">Téléphone de la fiche : {c.fiche_phone || 'non renseigné'} · compte créé le {c.user_created.slice(0, 10)} · demande du {c.created_at.slice(0, 10)}</p>
+          {c.message && <blockquote>{c.message}</blockquote>}
+          {c.owner_id && <p class="warn">Attention : la fiche a déjà un propriétaire.</p>}
+        </div>
+        <form method="post" class="acts">
+          <input type="hidden" name="id" value={c.id} />
+          <button class="btn gradient-bg" name="_action" value="approve">Accepter</button>
+          <button class="btn btn-ghost" name="_action" value="reject">Refuser</button>
+        </form>
+      </article>
+    ))}
+  </div>
+
+  {done.length > 0 && (
+    <section class="hist">
+      <h2>Historique</h2>
+      <div class="table-wrap">
+        <table class="table">
+          <thead><tr><th>Fiche</th><th>Demandeur</th><th>Décision</th><th>Date</th></tr></thead>
+          <tbody>{done.map((c) => <tr><td><a href={`/${c.slug}`}>{c.name}</a></td><td>{c.email}</td><td><span class:list={['badge', c.status === 'approved' ? 'badge-ok' : 'badge-err']}>{c.status === 'approved' ? 'Acceptée' : 'Refusée'}</span></td><td>{c.decided_at?.slice(0, 10)}</td></tr>)}</tbody>
+        </table>
+      </div>
+    </section>
+  )}
+</Admin>
+
+<style>
+  .list { display: grid; gap: .75rem; }
+  .claim { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 1rem; }
+  .claim h2 { margin: 0 0 .4rem; font-size: 1.1rem; }
+  .claim h2 a { color: var(--accent); }
+  .claim p { margin: .2rem 0; font-size: .92rem; }
+  blockquote { margin: .6rem 0 0; padding: .6rem .9rem; border-left: 3px solid var(--accent); background: var(--surface-2); border-radius: 0 10px 10px 0; font-size: .92rem; }
+  .warn { color: #b45309; font-weight: 600; }
+  .acts { display: flex; gap: .5rem; align-items: flex-start; }
+  .hist { margin-top: 2rem; }
+  .hist h2 { font-size: 1.1rem; }
+</style>

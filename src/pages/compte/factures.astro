@@ -1,0 +1,62 @@
+---
+import Base from '../../layouts/Base.astro';
+import AccountNav from '../../components/AccountNav.astro';
+import { SITE, PLANS, type PlanKey } from '../../config';
+import { invoicesOfUser, amountHt } from '../../lib/billing';
+import { get } from '../../lib/db';
+
+const user = Astro.locals.user!;
+const rows = invoicesOfUser(user.id);
+const bill = get<{ billing_name: string; billing_street: string; billing_city: string }>('SELECT billing_name, billing_street, billing_city FROM users WHERE id = ?', user.id);
+const incomplete = !bill?.billing_name || !bill?.billing_street || !bill?.billing_city;
+const euros = (n: number) => n.toLocaleString('fr-FR', { style: 'currency', currency: 'EUR' });
+const date = (d: string | null) => (d ? new Date(d).toLocaleDateString('fr-FR') : '');
+---
+<Base title={`Mes factures | ${SITE.fullName}`} noindex>
+  <div class="wrap narrow">
+    <header class="page-head">
+      <h1>Mes factures</h1>
+      <p>Factures de vos formules Pro et Premium, émises par {SITE.legal.company} et transmises en facture électronique.</p>
+    </header>
+    <AccountNav />
+
+    {incomplete && (
+      <p class="note">Renseignez vos <a href="/compte/parametres#facturation">coordonnées de facturation</a> (raison sociale, adresse, SIRET, n° de TVA) pour qu'elles figurent sur vos factures.</p>
+    )}
+
+    {rows.length === 0 ? (
+      <p class="panel muted empty">Aucune facture pour l'instant. Elles apparaîtront ici après chaque paiement de votre formule.</p>
+    ) : (
+      <div class="table-wrap">
+        <table class="table">
+          <thead><tr><th>Date</th><th>Fiche</th><th>Formule</th><th>Montant HT</th><th>TTC</th><th>Facture</th></tr></thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr>
+                <td>{date(r.paid_at)}</td>
+                <td>{r.fiche_name ?? '—'}</td>
+                <td>{PLANS[(r.plan as PlanKey) || 'pro'].name} {r.interval === 'year' ? 'annuel' : 'mensuel'}<br /><small class="muted">{r.period_start && `du ${date(r.period_start)} au ${date(r.period_end)}`}</small></td>
+                <td>{euros(amountHt(r.amount_ttc_cents, r.vat_rate))}</td>
+                <td>{euros(r.amount_ttc_cents / 100)}</td>
+                <td>
+                  {r.status === 'sent' && r.axonaut_url ? <a href={r.axonaut_url} target="_blank" rel="noopener">{r.axonaut_number || 'Télécharger'}</a>
+                   : r.status === 'refunded' ? <span class="badge">Remboursée</span>
+                   : <span class="badge badge-warn">En préparation</span>}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    )}
+    <p class="muted small">Moyen de paiement, résiliation et reçus de paiement : depuis la page « Ma formule » de chaque fiche.</p>
+  </div>
+</Base>
+
+<style>
+  .narrow { max-width: 76rem; }
+  .note { margin: 1rem 0 0; padding: .75rem 1rem; border-radius: 12px; background: color-mix(in srgb, #f59e0b 16%, var(--surface)); font-size: .92rem; }
+  .note a { color: var(--accent); font-weight: 600; }
+  .empty, .table-wrap { margin-top: 1rem; }
+  .small { font-size: .85rem; margin-top: 1rem; }
+</style>

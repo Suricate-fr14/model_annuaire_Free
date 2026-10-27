@@ -1,0 +1,48 @@
+---
+import Base from '../layouts/Base.astro';
+import { SITE } from '../config';
+import { consumePasswordReset, setPassword, passwordProblem, revokeSessions, startSession } from '../lib/auth';
+import { flash } from '../lib/flash';
+
+const token = Astro.url.searchParams.get('token') ?? '';
+let error = '';
+if (Astro.request.method === 'POST') {
+  const f = await Astro.request.formData();
+  const password = String(f.get('password') ?? '');
+  error = passwordProblem(password) ?? (password !== String(f.get('confirm') ?? '') ? 'Les deux mots de passe ne correspondent pas.' : '');
+  if (!error) {
+    const userId = consumePasswordReset(String(f.get('token') ?? ''));
+    if (!userId) error = 'Ce lien a expiré ou a déjà été utilisé. Refaites une demande.';
+    else {
+      setPassword(userId, password);
+      revokeSessions(userId);
+      startSession(Astro.cookies, userId);
+      flash(Astro.cookies, 'ok', 'Mot de passe modifié.');
+      return Astro.redirect('/compte');
+    }
+  }
+}
+---
+<Base title={`Nouveau mot de passe | ${SITE.fullName}`} noindex>
+  <div class="wrap auth">
+    <div class="panel">
+      <h1>Choisir un nouveau mot de passe</h1>
+      {error && <div class="errors" role="alert"><p>{error}</p></div>}
+      {token ? (
+        <form method="post" class="form">
+          <input type="hidden" name="token" value={token} />
+          <label class="field"><span>Nouveau mot de passe</span><input name="password" type="password" required minlength="10" autocomplete="new-password" /></label>
+          <label class="field"><span>Confirmation</span><input name="confirm" type="password" required minlength="10" autocomplete="new-password" /></label>
+          <button class="btn gradient-bg" type="submit">Enregistrer</button>
+        </form>
+      ) : <p>Lien incomplet. <a href="/mot-de-passe-oublie">Refaire une demande</a>.</p>}
+    </div>
+  </div>
+</Base>
+
+<style>
+  .auth { max-width: 28rem; padding-top: 3rem; }
+  h1 { margin: 0 0 1rem; font-size: 1.5rem; }
+  .errors p { margin: 0; }
+  .form { margin-top: 1rem; }
+</style>

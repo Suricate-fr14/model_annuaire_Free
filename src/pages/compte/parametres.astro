@@ -1,0 +1,179 @@
+---
+import Base from '../../layouts/Base.astro';
+import AccountNav from '../../components/AccountNav.astro';
+import { SITE, axonautEnabled } from '../../config';
+import { checkCredentials, setPassword, passwordProblem, revokeSessions, startSession, endSession, findUserByEmail } from '../../lib/auth';
+import { emailValid } from '../../lib/text';
+import { flash } from '../../lib/flash';
+import { all, get, run, audit } from '../../lib/db';
+import { updateCompany } from '../../lib/axonaut';
+import { removeImage } from '../../lib/uploads';
+import { invalidateStats } from '../../lib/fiches';
+
+const user = Astro.locals.user!;
+let errors: string[] = [];
+
+if (Astro.request.method === 'POST') {
+  const f = await Astro.request.formData();
+  const action = f.get('_action');
+  const current = String(f.get('current') ?? '');
+
+  if (action === 'report') {
+    run('UPDATE users SET monthly_report = ?, tips_emails = ? WHERE id = ?', f.get('monthly_report') === 'on' ? 1 : 0, f.get('tips_emails') === 'on' ? 1 : 0, user.id);
+    flash(Astro.cookies, 'ok', 'Préférence enregistrée.');
+    return Astro.redirect('/compte/parametres');
+  }
+
+  if (action === 'profile') {
+    const name = String(f.get('name') ?? '').trim().slice(0, 80);
+    const email = String(f.get('email') ?? '').trim().toLowerCase();
+    if (name.length < 2) errors.push('Nom trop court.');
+    if (!emailValid(email)) errors.push('Email invalide.');
+    if (email !== user.email) {
+      if (!checkCredentials(user.email, current)) errors.push("Mot de passe actuel requis pour changer d'email.");
+      else if (findUserByEmail(email)) errors.push('Cet email est déjà utilisé.');
+    }
+    if (!errors.length) {
+      run('UPDATE users SET name = ?, email = ? WHERE id = ?', name, email, user.id);
+      flash(Astro.cookies, 'ok', 'Profil mis à jour.');
+      return Astro.redirect('/compte/parametres');
+    }
+  }
+
+  if (action === 'billing') {
+    const b = {
+      name: String(f.get('billing_name') ?? '').trim().slice(0, 120),
+      street: String(f.get('billing_street') ?? '').trim().slice(0, 200),
+      zip: String(f.get('billing_zip') ?? '').trim().slice(0, 10),
+      city: String(f.get('billing_city') ?? '').trim().slice(0, 80),
+      country: String(f.get('billing_country') ?? 'France').trim().slice(0, 60) || 'France',
+      siret: String(f.get('billing_siret') ?? '').replace(/\s/g, '').slice(0, 14),
+      vat: String(f.get('billing_vat') ?? '').replace(/\s/g, '').toUpperCase().slice(0, 20),
+    };
+    if (b.name.length < 2) errors.push('Indiquez la raison sociale (ou votre nom pour un indépendant).');
+    if (!b.street || !b.city) errors.push('Indiquez une adresse de facturation complète.');
+    if (b.country === 'France' && !/^\d{5}$/.test(b.zip)) errors.push('Code postal invalide.');
+    if (b.siret && !/^\d{14}$/.test(b.siret)) errors.push('Le SIRET doit contenir 14 chiffres.');
+    if (b.vat && !/^[A-Z]{2}[0-9A-Z]{2,13}$/.test(b.vat)) errors.push('Numéro de TVA intracommunautaire invalide (ex. FR12345678901).');
+    if (!errors.length) {
+      run(`UPDATE users SET billing_name = ?, billing_street = ?, billing_zip = ?, billing_city = ?, billing_country = ?, billing_siret = ?, billing_vat = ? WHERE id = ?`,
+        b.name, b.street, b.zip, b.city, b.country, b.siret, b.vat, user.id);
+      // Client déjà créé dans Axonaut : ses coordonnées sont mises à jour pour les prochaines factures.
+      const axId = get<{ axonaut_company_id: number | null }>('SELECT axonaut_company_id FROM users WHERE id = ?', user.id)?.axonaut_company_id;
+      if (axId && axonautEnabled()) { try { await updateCompany(axId, b); } catch (e) { console.error(e); } }
+      flash(Astro.cookies, 'ok', 'Coordonnées de facturation enregistrées : elles figureront sur vos prochaines factures.');
+      return Astro.redirect('/compte/parametres#facturation');
+    }
+  }
+
+  if (action === 'password') {
+    const next = String(f.get('password') ?? '');
+    if (!checkCredentials(user.email, current)) errors.push('Mot de passe actuel incorrect.');
+    const pb = passwordProblem(next);
+    if (pb) errors.push(pb);
+    if (!errors.length) {
+      setPassword(user.id, next);
+      revokeSessions(user.id);
+      startSession(Astro.cookies, user.id);
+      flash(Astro.cookies, 'ok', 'Mot de passe modifié. Vos autres sessions ont été déconnectées.');
+      return Astro.redirect('/compte/parametres');
+    }
+  }
+
+  if (action === 'delete') {
+    if (!checkCredentials(user.email, current)) errors.push('Mot de passe incorrect.');
+    else if (user.role === 'admin' && (all("SELECT id FROM users WHERE role = 'admin'").length <= 1)) errors.push('Impossible de supprimer le dernier administrateur.');
+    else {
+      // Fiches créées par l'utilisateur : supprimées. Fiches importées revendiquées : libérées.
+      for (const fi of all<{ id: number; source: string; logo: string; photos: string }>('SELECT id, source, logo, photos FROM fiches WHERE owner_id = ?', user.id)) {
+        if (fi.source === 'user') {
+          [fi.logo, ...JSON.parse(fi.photos)].filter(Boolean).forEach(removeImage);
+          run('DELETE FROM fiches WHERE id = ?', fi.id);
+        } else run('UPDATE fiches SET owner_id = NULL WHERE id = ?', fi.id);
+      }
+      audit(user.id, 'user.delete', user.email);
+      endSession(Astro.cookies);
+      run('DELETE FROM users WHERE id = ?', user.id);
+      invalidateStats();
+      flash(Astro.cookies, 'info', 'Votre compte a été supprimé.');
+      return Astro.redirect('/');
+    }
+  }
+}
+const bill = get<any>('SELECT billing_name, billing_street, billing_zip, billing_city, billing_country, billing_siret, billing_vat FROM users WHERE id = ?', user.id) ?? {};
+const prefs = get<{ monthly_report: number; tips_emails: number }>('SELECT monthly_report, tips_emails FROM users WHERE id = ?', user.id);
+---
+<Base title={`Paramètres | ${SITE.fullName}`} noindex>
+  <div class="wrap narrow">
+    <header class="page-head"><h1>Paramètres du compte</h1></header>
+    <AccountNav />
+    {errors.length > 0 && <div class="errors" role="alert"><ul>{errors.map((e) => <li>{e}</li>)}</ul></div>}
+
+    <form method="post" class="panel form">
+      <h2>Profil</h2>
+      <input type="hidden" name="_action" value="profile" />
+      <div class="row2">
+        <label class="field"><span>Nom</span><input name="name" value={user.name} required /></label>
+        <label class="field"><span>Email</span><input name="email" type="email" value={user.email} required /></label>
+      </div>
+      <label class="field"><span>Mot de passe actuel <small>(requis seulement pour changer d'email)</small></span><input name="current" type="password" autocomplete="current-password" /></label>
+      <div><button class="btn gradient-bg" type="submit">Enregistrer</button></div>
+    </form>
+
+    <form method="post" class="panel form" id="facturation">
+      <h2>Coordonnées de facturation</h2>
+      <p class="muted">Elles figurent sur les factures de vos formules Pro et Premium. À défaut, celles saisies lors du paiement sont utilisées.</p>
+      <input type="hidden" name="_action" value="billing" />
+      <label class="field"><span>Raison sociale (ou nom pour un indépendant)</span><input name="billing_name" value={bill.billing_name} required autocomplete="organization" /></label>
+      <label class="field"><span>Adresse</span><input name="billing_street" value={bill.billing_street} required autocomplete="street-address" /></label>
+      <div class="row2">
+        <label class="field"><span>Code postal</span><input name="billing_zip" value={bill.billing_zip} inputmode="numeric" autocomplete="postal-code" /></label>
+        <label class="field"><span>Ville</span><input name="billing_city" value={bill.billing_city} required autocomplete="address-level2" /></label>
+        <label class="field"><span>Pays</span><input name="billing_country" value={bill.billing_country || 'France'} autocomplete="country-name" /></label>
+      </div>
+      <div class="row2">
+        <label class="field"><span>SIRET <small>(facultatif)</small></span><input name="billing_siret" value={bill.billing_siret} inputmode="numeric" placeholder="14 chiffres" /></label>
+        <label class="field"><span>N° de TVA intracommunautaire <small>(facultatif)</small></span><input name="billing_vat" value={bill.billing_vat} placeholder="FR12345678901" /></label>
+      </div>
+      <div><button class="btn btn-ghost" type="submit">Enregistrer</button> <a class="inv-link" href="/compte/factures">Voir mes factures →</a></div>
+    </form>
+
+    <form method="post" class="panel form" id="bilan">
+      <h2>Emails</h2>
+      <input type="hidden" name="_action" value="report" />
+      <label class="check"><input type="checkbox" name="monthly_report" checked={prefs?.monthly_report !== 0} /> <span><strong>Bilan mensuel</strong> : l'activité de mes fiches chaque mois (vues, appels, itinéraires, clics, demandes de devis)</span></label>
+      <label class="check"><input type="checkbox" name="tips_emails" checked={prefs?.tips_emails !== 0} /> <span><strong>Conseils et rappels</strong> : fiche à compléter, formule choisie non finalisée, actualité terminée (un email au plus par jour)</span></label>
+      <p class="muted">Les emails liés à votre compte, à vos paiements et aux demandes de vos clients sont toujours envoyés.</p>
+      <div><button class="btn btn-ghost" type="submit">Enregistrer</button></div>
+    </form>
+
+    <form method="post" class="panel form">
+      <h2>Mot de passe</h2>
+      <input type="hidden" name="_action" value="password" />
+      <div class="row2">
+        <label class="field"><span>Mot de passe actuel</span><input name="current" type="password" required autocomplete="current-password" /></label>
+        <label class="field"><span>Nouveau mot de passe</span><input name="password" type="password" required minlength="10" autocomplete="new-password" /></label>
+      </div>
+      <div><button class="btn btn-ghost" type="submit">Changer le mot de passe</button></div>
+    </form>
+
+    <form method="post" class="panel form danger">
+      <h2>Supprimer mon compte</h2>
+      <p class="muted">Vos fiches créées sont supprimées ; les fiches que vous aviez revendiquées redeviennent non revendiquées. Résiliez d'abord vos abonnements en cours.</p>
+      <input type="hidden" name="_action" value="delete" />
+      <label class="field"><span>Mot de passe</span><input name="current" type="password" required autocomplete="current-password" /></label>
+      <div><button class="btn btn-danger" type="submit" data-confirm="Supprimer définitivement votre compte ?">Supprimer mon compte</button></div>
+    </form>
+  </div>
+</Base>
+
+<style>
+  .narrow { max-width: 64rem; }
+  .panel { margin-top: 1rem; }
+  .panel h2 { margin: 0; font-size: 1.15rem; }
+  .errors { margin-top: 1rem; }
+  .danger { border-color: color-mix(in srgb, #dc2626 35%, var(--line)); }
+  .danger p { margin: 0; }
+  .panel > p.muted { margin: 0; }
+  .inv-link { margin-left: .75rem; color: var(--accent); font-weight: 600; font-size: .92rem; }
+</style>

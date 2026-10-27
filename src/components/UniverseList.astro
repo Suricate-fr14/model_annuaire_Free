@@ -1,0 +1,45 @@
+---
+// Liste des univers en colonnes (façon annuaire web / pages jaunes).
+import { universeCounts } from '../lib/fiches';
+import { universeUrl } from '../lib/taxonomy';
+
+interface Props { title?: string; exclude?: string }
+const { title = 'Tous les univers', exclude } = Astro.props;
+const list = universeCounts().filter((u) => u.slug !== exclude);
+---
+<section class="ul-wrap" aria-labelledby="t-universes">
+  <div class="ul-head">
+    <h2 id="t-universes">{title}</h2>
+    <a href="/univers" class="all">Voir toutes les catégories →</a>
+  </div>
+  <ul class="ulist">
+    {list.map((u) => (
+      <li>
+        <a href={universeUrl(u)} class:list={{ empty: u.count === 0 }}>
+          <span class="chev" aria-hidden="true">›</span>
+          <span class="nm">{u.name}</span>
+          {u.count > 0 && <span class="n">{u.count.toLocaleString('fr-FR')}</span>}
+        </a>
+      </li>
+    ))}
+  </ul>
+</section>
+
+<style>
+  .ul-wrap {
+    margin-top: 3.25rem; padding: 1.5rem; border: 1px solid var(--line);
+    border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow);
+  }
+  .ul-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: .5rem 1rem; margin-bottom: 1rem; }
+  h2 { margin: 0; font-size: 1.3rem; letter-spacing: -0.01em; }
+  .all { color: var(--accent); font-weight: 600; font-size: .9rem; }
+  .all:hover { text-decoration: underline; }
+  .ulist { list-style: none; margin: 0; padding: 0; columns: 3 15rem; column-gap: 2rem; }
+  li { break-inside: avoid; }
+  li a { display: flex; align-items: baseline; gap: .55rem; padding: .4rem .25rem; font-weight: 500; border-radius: 8px; }
+  .chev { color: var(--accent-2); font-weight: 800; }
+  .nm { flex: 1; }
+  li a:hover .nm { text-decoration: underline; text-underline-offset: 3px; }
+  .n { color: var(--muted); font-size: .78rem; font-weight: 600; }
+  li a.empty { color: var(--muted); }
+</style>

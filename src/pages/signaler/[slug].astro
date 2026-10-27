@@ -1,0 +1,63 @@
+---
+import Base from '../../layouts/Base.astro';
+import { SITE, ENV } from '../../config';
+import { getFicheBySlug } from '../../lib/fiches';
+import { run } from '../../lib/db';
+import { notifyAdmins } from '../../lib/mail';
+import { flash } from '../../lib/flash';
+import { queueEvent } from '../../lib/analytics';
+import { emailValid } from '../../lib/text';
+import { rateLimited, clientIp } from '../../lib/auth';
+
+const f = getFicheBySlug(Astro.params.slug ?? '');
+if (!f || f.status !== 'published') return new Response('Fiche introuvable', { status: 404 });
+
+const REASONS: Record<string, string> = {
+  horaires: 'Horaires incorrects', adresse: 'Adresse ou position incorrecte', telephone: 'Téléphone incorrect',
+  ferme: 'Établissement définitivement fermé', doublon: 'Fiche en double', contenu: 'Contenu inapproprié', autre: 'Autre',
+};
+let errors: string[] = [];
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const reason = String(form.get('reason') ?? '');
+  const message = String(form.get('message') ?? '').trim().slice(0, 1500);
+  const email = String(form.get('email') ?? '').trim().slice(0, 120);
+  if (String(form.get('website_hp') ?? '')) errors.push('Envoi refusé.');
+  if (!REASONS[reason]) errors.push('Choisissez un motif.');
+  if (email && !emailValid(email)) errors.push('Email invalide.');
+  if (rateLimited(`report:${clientIp(Astro.request, Astro.clientAddress)}`, 10, 3600e3)) errors.push('Trop de signalements envoyés, réessayez plus tard.');
+  if (!errors.length) {
+    run('INSERT INTO reports (fiche_id, reason, message, email) VALUES (?, ?, ?, ?)', f.id, reason, message, email);
+    await notifyAdmins(`Signalement : ${f.name}`, `${REASONS[reason]}\n${message}\n\n${ENV.siteUrl}/admin/signalements`);
+    flash(Astro.cookies, 'ok', 'Merci ! Votre signalement a été transmis à notre équipe.');
+    queueEvent(Astro.cookies, 'report_error', { fiche_id: f.id, report_reason: reason });
+    return Astro.redirect(`/${f.slug}`);
+  }
+}
+---
+<Base title={`Signaler une erreur · ${f.name} | ${SITE.fullName}`} noindex>
+  <div class="wrap narrow">
+    <header class="page-head">
+      <h1>Signaler une erreur</h1>
+      <p>Fiche : <a href={`/${f.slug}`}>{f.name}</a></p>
+    </header>
+    <form method="post" class="panel form">
+      {errors.length > 0 && <div class="errors" role="alert"><ul>{errors.map((e) => <li>{e}</li>)}</ul></div>}
+      <fieldset class="field reasons">
+        <legend class="label">Motif</legend>
+        {Object.entries(REASONS).map(([k, l]) => <label class="check"><input type="radio" name="reason" value={k} required /> {l}</label>)}
+      </fieldset>
+      <label class="field"><span>Précisions</span><textarea name="message" rows="4" placeholder="Ex. le magasin ouvre désormais à 9h le samedi"></textarea></label>
+      <label class="field"><span>Votre email <small>(facultatif, pour être tenu informé)</small></span><input name="email" type="email" /></label>
+      <label class="hp" aria-hidden="true">Ne pas remplir <input name="website_hp" tabindex="-1" autocomplete="off" /></label>
+      <div><button class="btn gradient-bg" type="submit">Envoyer</button></div>
+    </form>
+  </div>
+</Base>
+
+<style>
+  .narrow { max-width: 40rem; }
+  .page-head a { color: var(--accent); font-weight: 600; }
+  .reasons { border: 0; padding: 0; margin: 0; display: grid; gap: .45rem; }
+  .hp { position: absolute; left: -9999px; }
+</style>

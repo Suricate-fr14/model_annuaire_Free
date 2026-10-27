@@ -1,0 +1,117 @@
+---
+import Admin from '../../layouts/Admin.astro';
+import Icon from '../../components/Icon.astro';
+import { all, get } from '../../lib/db';
+import { flash } from '../../lib/flash';
+import { approveLead, rejectLead, deleteLead, REQUEST_TYPES, TIMINGS, LEAD_STATUS, parisDate, type Lead } from '../../lib/leads';
+import { phoneDisplay, phoneHref } from '../../lib/text';
+
+const me = Astro.locals.user!;
+const REJECT_REASONS = ['Spam ou demande factice', 'Coordonnées invalides', 'Demande hors sujet', 'Doublon'];
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const id = Number(form.get('id'));
+  const action = form.get('_action');
+  if (action === 'send') {
+    const err = await approveLead(id, me.id);
+    flash(Astro.cookies, err ? 'error' : 'ok', err ?? 'Demande transmise au professionnel (email envoyé, prospect prévenu).');
+  } else if (action === 'reject') {
+    rejectLead(id, me.id, String(form.get('reason') ?? ''));
+    flash(Astro.cookies, 'ok', 'Demande refusée : elle ne sera pas transmise.');
+  } else if (action === 'delete') {
+    deleteLead(id, me.id);
+    flash(Astro.cookies, 'ok', 'Demande supprimée définitivement.');
+  }
+  return Astro.redirect('/admin/demandes' + Astro.url.search);
+}
+
+const status = Astro.url.searchParams.get('statut') ?? 'pending';
+const filter = ['pending', 'sent', 'rejected'].includes(status) ? status : '';
+const rows = all<Lead & { fiche_name: string; fiche_slug: string; fiche_id: number; owner_email: string | null }>(
+  `SELECT l.*, f.name AS fiche_name, f.slug AS fiche_slug, u.email AS owner_email
+   FROM leads l JOIN fiches f ON f.id = l.fiche_id LEFT JOIN users u ON u.id = f.owner_id
+   ${filter ? 'WHERE l.status = ?' : ''} ORDER BY l.created_at DESC LIMIT 300`, ...(filter ? [filter] : []));
+const counts = Object.fromEntries(all<{ status: string; n: number }>('SELECT status, COUNT(*) n FROM leads GROUP BY status').map((r) => [r.status, r.n]));
+const month = get<{ n: number }>("SELECT COUNT(*) n FROM leads WHERE status = 'sent' AND decided_at >= date('now', 'start of month')")!.n;
+const tabs = [['pending', 'À vérifier'], ['sent', 'Transmises'], ['rejected', 'Refusées'], ['tous', 'Toutes']];
+---
+<Admin title="Demandes de contact" subtitle="Leads des fiches Premium : à vérifier avant transmission au professionnel">
+  <nav class="tabs" aria-label="Filtrer">
+    {tabs.map(([k, l]) => (
+      <a href={`/admin/demandes?statut=${k}`} aria-current={(filter || 'tous') === k ? 'page' : undefined}>
+        {l}{k !== 'tous' && <span class="n">{counts[k] ?? 0}</span>}
+      </a>
+    ))}
+    <span class="muted month">{month} transmise{month > 1 ? 's' : ''} ce mois-ci</span>
+  </nav>
+
+  {rows.length === 0 && <p class="panel muted">{filter === 'pending' ? 'Aucune demande à vérifier.' : 'Aucune demande.'}</p>}
+  <div class="list">
+    {rows.map((l) => (
+      <article class="panel lead" id={`l${l.id}`}>
+        <header>
+          <span class:list={['badge', { 'badge-warn': l.status === 'pending', 'badge-ok': l.status === 'sent' }]}>{LEAD_STATUS[l.status]}</span>
+          <strong>{REQUEST_TYPES[l.request_type] ?? l.request_type}</strong>
+          <span class="muted">pour <a href={`/admin/fiches/${l.fiche_id}`}>{l.fiche_name}</a> · {parisDate(l.created_at)}</span>
+          <a class="muted ext" href={`/${l.fiche_slug}`} target="_blank" title="Voir la fiche"><Icon name="external" size={14} /></a>
+        </header>
+        <div class="body">
+          <p class="msg">{l.message}</p>
+          <dl>
+            <dt>Prospect</dt><dd>{l.name}</dd>
+            <dt>Téléphone</dt><dd><a href={phoneHref(l.phone)}>{phoneDisplay(l.phone)}</a></dd>
+            <dt>Email</dt><dd><a href={`mailto:${l.email}`}>{l.email}</a></dd>
+            {l.postcode && <><dt>Code postal</dt><dd>{l.postcode}</dd></>}
+            <dt>Délai</dt><dd>{TIMINGS[l.timing] ?? '—'}</dd>
+            <dt>Destinataire</dt><dd>{l.status === 'sent' ? l.sent_to : l.owner_email ?? <span class="err">aucun propriétaire</span>}</dd>
+            {l.status !== 'pending' && <><dt>Traitée le</dt><dd>{parisDate(l.decided_at)}{l.reject_reason && ` · ${l.reject_reason}`}</dd></>}
+          </dl>
+        </div>
+        <footer>
+          {l.status === 'pending' && (
+            <>
+              <form method="post">
+                <input type="hidden" name="id" value={l.id} />
+                <button class="btn gradient-bg btn-sm" name="_action" value="send" disabled={!l.owner_email}><Icon name="check" size={14} /> Valider et transmettre</button>
+              </form>
+              <form method="post" class="reject">
+                <input type="hidden" name="id" value={l.id} />
+                <select class="input" name="reason" aria-label="Motif du refus">{REJECT_REASONS.map((r) => <option>{r}</option>)}</select>
+                <button class="btn btn-ghost btn-sm" name="_action" value="reject">Refuser</button>
+              </form>
+            </>
+          )}
+          <form method="post" class="del">
+            <input type="hidden" name="id" value={l.id} />
+            <button class="btn btn-ghost btn-sm" name="_action" value="delete" data-confirm="Supprimer définitivement cette demande (données du prospect) ?"><Icon name="trash" size={14} /> Supprimer</button>
+          </form>
+        </footer>
+      </article>
+    ))}
+  </div>
+</Admin>
+
+<style>
+  .tabs { display: flex; flex-wrap: wrap; align-items: center; gap: .35rem; margin-bottom: 1rem; }
+  .tabs a { display: inline-flex; gap: .4rem; align-items: center; padding: .45rem .85rem; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); font-weight: 600; font-size: .9rem; }
+  .tabs a[aria-current] { background: var(--text); color: var(--bg); border-color: var(--text); }
+  .tabs .n { font-size: .78rem; opacity: .75; }
+  .tabs .month { margin-left: auto; font-size: .88rem; }
+  .list { display: grid; gap: .8rem; }
+  .lead { display: grid; gap: .8rem; padding: 1rem 1.2rem; }
+  .lead header { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
+  .lead header a:not(.ext) { color: var(--accent); font-weight: 600; }
+  .body { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 1.2rem; }
+  @media (max-width: 760px) { .body { grid-template-columns: 1fr; } }
+  .msg { margin: 0; white-space: pre-wrap; padding: .8rem .9rem; border-radius: 10px; background: var(--surface-2); line-height: 1.5; }
+  dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: .3rem .8rem; font-size: .9rem; }
+  dt { color: var(--muted); }
+  dd { margin: 0; overflow-wrap: anywhere; }
+  dd a { color: var(--accent); }
+  .err { color: #b91c1c; font-weight: 600; }
+  .lead footer { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
+  .reject { display: flex; gap: .4rem; align-items: center; }
+  .reject .input { padding: .35rem .5rem; font-size: .85rem; width: auto; }
+  .del { margin-left: auto; }
+</style>

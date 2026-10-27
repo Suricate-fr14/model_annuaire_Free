@@ -1,0 +1,58 @@
+---
+import Base from '../../../layouts/Base.astro';
+import AccountNav from '../../../components/AccountNav.astro';
+import FicheForm from '../../../components/FicheForm.astro';
+import { SITE, ENV } from '../../../config';
+import { parseFicheForm } from '../../../lib/ficheForm';
+import { createFiche } from '../../../lib/fiches';
+import { notifyAdmins, send } from '../../../lib/mail';
+import { ficheReceived } from '../../../lib/emails';
+import { flash } from '../../../lib/flash';
+import { queueEvent } from '../../../lib/analytics';
+import { audit, run } from '../../../lib/db';
+import { readIntent, intentLabel } from '../../../lib/intent';
+import { rateLimited } from '../../../lib/auth';
+
+const user = Astro.locals.user!;
+const intent = readIntent(Astro.url);
+let errors: string[] = [];
+let values: any = { name: Astro.url.searchParams.get('nom') ?? '', city: Astro.url.searchParams.get('ville') ?? '' };
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const { data, errors: errs } = await parseFicheForm(form, { pro: false });
+  errors = errs;
+  values = data;
+  if (!errors.length && rateLimited(`create:${user.id}`, 10, 24 * 3600e3)) errors.push('Limite de création de fiches atteinte pour aujourd’hui.');
+  if (!errors.length) {
+    // Toute fiche créée par un professionnel, gratuite ou payante, attend la validation d'un administrateur :
+    // elle n'apparaît pas sur le site et ne peut pas être payée avant d'être publiée.
+    const { id } = createFiche(data, { ownerId: user.id, status: 'pending' });
+    audit(user.id, 'fiche.create', String(id));
+    queueEvent(Astro.cookies, 'create_fiche', { fiche_city: data.city ?? '', wanted_plan: intent?.plan ?? '' });
+    if (intent) run('UPDATE fiches SET wanted_plan = ?, wanted_interval = ? WHERE id = ?', intent.plan, intent.interval, id);
+    await send(user.email, ficheReceived(user.name, { id, name: data.name }));
+    await notifyAdmins(`Nouvelle fiche à valider : ${data.name}`, `${user.email} a créé la fiche « ${data.name} » (${data.city})${intent ? `, formule souhaitée : ${intentLabel(intent)}` : ''}.\nÀ valider : ${ENV.siteUrl}/admin/fiches/${id}`);
+    flash(Astro.cookies, 'ok', intent
+      ? `Fiche enregistrée ! Dès sa validation (généralement sous 24 h), nous vous enverrons le lien pour activer la formule ${intentLabel(intent)}.`
+      : 'Fiche enregistrée ! Elle sera visible après validation par notre équipe (généralement sous 24 h).');
+    return Astro.redirect('/compte');
+  }
+}
+---
+<Base title={`Créer une fiche | ${SITE.fullName}`} noindex>
+  <div class="wrap narrow">
+    <header class="page-head">
+      <h1>Créer la fiche de votre établissement</h1>
+      <p>Les champs marqués * sont obligatoires. Vous pourrez tout modifier ensuite.{intent && <> Formule choisie : <strong>{intentLabel(intent)}</strong>, activable dès la validation ; le site internet, le plan et la présentation détaillée se complètent ensuite.</>}</p>
+    </header>
+    <AccountNav />
+    <div class="gap"></div>
+    <FicheForm values={values} pro={false} errors={errors} submitLabel="Envoyer pour validation" isNew={Astro.request.method !== 'POST'} />
+  </div>
+</Base>
+
+<style>
+  .narrow { max-width: 76rem; }
+  .gap { height: 1rem; }
+</style>

@@ -1,0 +1,84 @@
+---
+import Base from '../../../../layouts/Base.astro';
+import AccountNav from '../../../../components/AccountNav.astro';
+import PlanCards from '../../../../components/PlanCards.astro';
+import PromoBanner from '../../../../components/PromoBanner.astro';
+import Icon from '../../../../components/Icon.astro';
+import { SITE, PLANS, stripeEnabled, isPlanKey, annualOfferLabel } from '../../../../config';
+import { getFiche } from '../../../../lib/fiches';
+import { checkoutUrl, portalUrl } from '../../../../lib/stripe';
+import { readIntent, intentFrom } from '../../../../lib/intent';
+
+const user = Astro.locals.user!;
+const f = getFiche(Number(Astro.params.id));
+if (!f || (f.owner_id !== user.id && user.role !== 'admin')) return new Response('Fiche introuvable', { status: 404 });
+const current = f.certified ? (f.premium ? 'premium' : 'pro') : '';
+const chosen = readIntent(Astro.url) ?? intentFrom(f.wanted_plan, f.wanted_interval);
+
+let error = '';
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  try {
+    if (form.get('_action') === 'subscribe') {
+      const plan = form.get('plan');
+      const interval = form.get('interval') === 'month' ? 'month' : 'year';
+      if (!isPlanKey(plan)) error = 'Formule inconnue.';
+      else if (f.status !== 'published') error = 'La fiche doit être validée avant de pouvoir souscrire une formule.';
+      // Abonnement Stripe déjà en cours : le changement de formule se fait dans le portail (prorata automatique).
+      else if (f.certified && stripeEnabled() && f.stripe_subscription) return Astro.redirect(await portalUrl(f));
+      else return Astro.redirect(await checkoutUrl(f, user.email, plan, interval));
+    }
+    if (form.get('_action') === 'manage') return Astro.redirect(await portalUrl(f));
+  } catch (e) {
+    console.error(e);
+    error = 'Le service de paiement est momentanément indisponible. Réessayez dans quelques minutes.';
+  }
+}
+const cancelled = Astro.url.searchParams.get('annule') === '1';
+const fmt = (d: string | null) => (d ? new Date(d).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' }) : '');
+---
+<Base title={`Formule · ${f.name} | ${SITE.fullName}`} noindex>
+  <div class="wrap">
+    <header class="page-head">
+      <h1>Visibilité de « {f.name} »</h1>
+      <p>Sans engagement. Annuel : {annualOfferLabel()}.</p>
+    </header>
+    <AccountNav />
+    {!stripeEnabled() && <p class="note"><Icon name="info" size={16} /> Mode démonstration : aucune clé Stripe n'est configurée, le paiement est simulé et rien n'est débité.</p>}
+    {cancelled && <p class="note">Paiement annulé : aucun montant n'a été débité.</p>}
+    {error && <div class="errors" role="alert"><p>{error}</p></div>}
+
+    {f.certified && (
+      <section class="panel status">
+        <div>
+          <h2>Formule {PLANS[current as 'pro' | 'premium'].name} active</h2>
+          <p class="muted">
+            {f.pro_status === 'canceled' ? `Résiliée : la formule reste active jusqu'au ${fmt(f.pro_until)}.` :
+             f.pro_status === 'past_due' ? 'Le dernier paiement a échoué : mettez à jour votre moyen de paiement.' :
+             `Prochain renouvellement le ${fmt(f.pro_until)}.`}
+          </p>
+        </div>
+        <form method="post">
+          <input type="hidden" name="_action" value="manage" />
+          <button class="btn btn-ghost" type="submit">Factures, paiement, résiliation</button>
+        </form>
+      </section>
+    )}
+
+    {f.status !== 'published' && <p class="note">La souscription sera possible dès la validation de votre fiche.</p>}
+    {!current && <PromoBanner />}
+    <div class="cards-gap"><PlanCards mode="account" current={current} canSubscribe={f.status === 'published'} selected={chosen?.plan ?? ''} interval={chosen?.interval ?? 'year'} /></div>
+    <p class="back"><a href={`/compte/fiches/${f.id}`}>← Retour à la fiche</a></p>
+  </div>
+</Base>
+
+<style>
+  .note { display: flex; gap: .4rem; align-items: center; margin: 1rem 0 0; padding: .7rem 1rem; border-radius: 12px; background: color-mix(in srgb, var(--cert) 12%, var(--surface)); font-size: .92rem; }
+  .errors { margin-top: 1rem; } .errors p { margin: 0; }
+  .status { margin-top: 1rem; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 1rem; }
+  .status h2 { margin: 0 0 .3rem; font-size: 1.15rem; }
+  .status p { margin: 0; }
+  .cards-gap { margin-top: 2rem; }
+  .back { margin-top: 1.5rem; }
+  .back a { color: var(--accent); font-weight: 600; }
+</style>

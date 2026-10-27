@@ -1,0 +1,269 @@
+---
+// Accueil : vitrine de l'annuaire (recherche, univers, fiches à la une, villes) et conversion des professionnels.
+// Le sommaire complet (toutes les catégories, toutes les villes, A à Z) est sur /annuaire.
+import Base from '../layouts/Base.astro';
+import SearchBar from '../components/SearchBar.astro';
+import FicheCard from '../components/FicheCard.astro';
+import SectionHead from '../components/SectionHead.astro';
+import Icon from '../components/Icon.astro';
+import { SITE, ENV, PLANS, euro, CITY } from '../config';
+import { dailyPicks, newcomers, stats, todayLabel, universeCounts } from '../lib/fiches';
+import { universeUrl, getUniverse } from '../lib/taxonomy';
+import { collectionGraph } from '../lib/schema';
+import { faqGraph, type Faq } from '../lib/pageContent';
+import { localNews } from '../lib/newsFeed';
+
+const s = stats();
+// Actualités : toujours 4 articles (une rangée complète) ; s'il y en a moins, le bloc n'est pas affiché.
+const newsAll = await localNews(4);
+const news = newsAll.length >= 4 ? newsAll : [];
+const newsDate = (d: string) => { const t = Date.parse(d); return Number.isNaN(t) ? '' : new Date(t).toLocaleDateString('fr-FR', { timeZone: SITE.timezone, day: 'numeric', month: 'long' }); };
+
+const fr = (n: number) => n.toLocaleString('fr-FR');
+const nb = (n: number, one: string, many = `${one}s`) => `${fr(n)} ${n > 1 ? many : one}`;
+const picks = dailyPicks(8);
+const fresh = newcomers(4);
+const since = (d: string | null) => (d ? new Date(d).toLocaleDateString('fr-FR', { timeZone: SITE.timezone, day: 'numeric', month: 'long' }) : '');
+const quick = ['gastronomie', 'sante', 'batiment', 'beaute', 'commerce', 'auto'].map((k) => getUniverse(k)!).filter(Boolean);
+const unis = universeCounts().filter((u) => u.count > 0).sort((a, b) => b.count - a.count);
+const activeCats = unis.reduce((n, u) => n + u.categories.filter((c) => c.count > 0).length, 0);
+const towns = s.cities.slice(0, 12);
+const monthly = (p: { year: number }) => euro(Math.round((p.year / 12) * 100) / 100);
+
+const faq: Faq[] = [
+  { q: `Qu'est-ce que l'${SITE.fullName} ?`, a: `Un annuaire local gratuit des entreprises, commerces et professionnels ${CITY.of} et alentour : ${nb(s.total, 'établissement')} dans ${nb(s.cities.length, 'commune')}, avec horaires d'ouverture, adresse, itinéraire et coordonnées. Il est édité par ${SITE.parent.name}, ${SITE.parent.about}.` },
+  { q: "L'annuaire est-il gratuit ?", a: "Oui, pour les visiteurs comme pour les professionnels : la consultation est libre et sans inscription, et la création d'une fiche est gratuite. Les formules Pro et Premium, facultatives, ajoutent des fonctions de visibilité." },
+  { q: 'Comment ajouter ou modifier la fiche de mon entreprise ?', a: "Recherchez votre établissement : s'il est déjà listé, revendiquez la fiche pour la gérer ; sinon, créez-la en quelques minutes. Vous pouvez ensuite mettre à jour vos horaires, services, photos et réseaux sociaux à tout moment." },
+  { q: "D'où viennent les informations ?", a: "Des professionnels eux-mêmes pour les fiches revendiquées, et d'OpenStreetMap (licence ODbL) pour les autres, complétées par la Base Adresse Nationale pour les adresses. Une erreur ? Chaque fiche permet de la signaler." },
+  { q: "Que signifie « ouvert maintenant » ?", a: "L'indication est calculée en direct à partir des horaires de la fiche. Les horaires pouvant changer pendant les vacances et les jours fériés, vérifiez la fiche avant de vous déplacer." },
+];
+
+const jsonLd = [
+  ...collectionGraph({
+    path: '/', name: `${SITE.fullName} : entreprises, commerces et professionnels ${CITY.of}`, description: SITE.description,
+    items: unis.map((u) => ({ name: u.name, url: universeUrl(u) })),
+  }),
+  ...faqGraph(`${ENV.siteUrl}/`, faq),
+];
+---
+<Base title={`${SITE.fullName} : entreprises, commerces et professionnels ${CITY.of}`} jsonLd={jsonLd}>
+  <section class="hero">
+    <div class="wrap">
+      <p class="kicker">{nb(s.total, 'établissement')} · {nb(s.cities.length, 'commune')} autour de {CITY.name}</p>
+      <h1>Trouvez les <span class="grad">pros et commerces</span> {CITY.of}<span class="dot">.</span></h1>
+      <p class="lede">Horaires d'ouverture, adresse, téléphone, itinéraire et réseaux sociaux : l'annuaire local pour contacter le bon établissement, au bon moment.</p>
+      <div class="search"><SearchBar /></div>
+      <nav class="quick" aria-label="Accès rapide">
+        {quick.map((u) => <a href={universeUrl(u)} style={`--h:${u.hue}`}>{u.name}</a>)}
+      </nav>
+      <ul class="trust">
+        <li><Icon name="check" size={16} /> Gratuit et sans inscription</li>
+        <li><Icon name="clock" size={16} /> « Ouvert maintenant » en direct</li>
+        <li><Icon name="pin" size={16} /> 100 % local : {CITY.area}</li>
+      </ul>
+    </div>
+  </section>
+
+  <div class="wrap">
+    {fresh.length > 0 && (
+      <section class="first" aria-labelledby="t-new">
+        <SectionHead id="t-new" title="Nouveaux inscrits" aside={`Dernière inscription le ${since(fresh[0].published_at)}`} />
+        <ul class="cards">{fresh.map((f) => <li><FicheCard fiche={f} /></li>)}</ul>
+      </section>
+    )}
+
+    <section class="section" aria-labelledby="t-uni">
+      <div class="sh"><h2 id="t-uni">Découvrir par univers</h2><a href="/univers">Toutes les catégories →</a></div>
+      <ul class="tiles">
+        {unis.slice(0, 10).map((u) => (
+          <li>
+            <a href={universeUrl(u)} style={`--h:${u.hue}`}>
+              <span class="mark" aria-hidden="true">{u.name.charAt(0)}</span>
+              <span class="t">{u.name}</span>
+              <span class="d">{u.description}</span>
+              <span class="n">{fr(u.count)} {u.count > 1 ? 'adresses' : 'adresse'} →</span>
+            </a>
+          </li>
+        ))}
+      </ul>
+    </section>
+
+    {picks.length > 0 && (
+      <section class="section" aria-labelledby="t-daily">
+        <SectionHead id="t-daily" title="À découvrir aujourd'hui" aside={todayLabel()} />
+        <ul class="cards">{picks.map((f) => <li><FicheCard fiche={f} /></li>)}</ul>
+      </section>
+    )}
+
+    {news.length > 0 && (
+      <section class="section" aria-labelledby="t-news">
+        <div class="sh"><h2 id="t-news">L'actualité à {CITY.name}</h2><span class="src">Économie, commerces et vie locale</span></div>
+        <ul class="news">
+          {news.map((n) => (
+            <li>
+              <a href={n.link} target="_blank" rel="noopener">
+                {n.image ? <img src={n.image} alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" /> : <span class="ph" aria-hidden="true"><Icon name="star" size={22} /></span>}
+                <span class="nb">
+                  <span class="nd">{n.source}{newsDate(n.date) && <> · {newsDate(n.date)}</>}</span>
+                  <span class="nt">{n.title}</span>
+                  {n.excerpt && <span class="ne">{n.excerpt}</span>}
+                </span>
+              </a>
+            </li>
+          ))}
+        </ul>
+      </section>
+    )}
+
+    <section class="section how" aria-labelledby="t-how">
+      <h2 id="t-how">Comment ça marche ?</h2>
+      <ol class="steps">
+        <li><span class="ico"><Icon name="search" size={22} /></span><h3>Cherchez</h3><p>Un métier, un nom, une commune : la recherche trouve l'établissement, et le filtre « ouvert maintenant » écarte ceux qui sont fermés.</p></li>
+        <li><span class="ico"><Icon name="list" size={22} /></span><h3>Comparez</h3><p>Horaires détaillés, services (terrasse, livraison, accès PMR…), photos et présentation : tout ce qu'il faut pour choisir.</p></li>
+        <li><span class="ico"><Icon name="phone" size={22} /></span><h3>Contactez</h3><p>Appel, itinéraire, site internet, réseaux sociaux ou demande de devis : en un clic, depuis votre téléphone ou votre ordinateur.</p></li>
+      </ol>
+    </section>
+
+    <section class="figures" aria-label="L'annuaire en chiffres">
+      <div><strong>{fr(s.total)}</strong><span>{s.total > 1 ? 'établissements référencés' : 'établissement référencé'}</span></div>
+      <div><strong>{fr(activeCats)}</strong><span>{activeCats > 1 ? "catégories d'activité" : "catégorie d'activité"}</span></div>
+      <div><strong>{fr(s.cities.length)}</strong><span>{s.cities.length > 1 ? 'communes couvertes' : 'commune couverte'}</span></div>
+      <div><strong>{fr(s.certified)}</strong><span>{s.certified > 1 ? 'fiches certifiées' : 'fiche certifiée'} par leur professionnel</span></div>
+    </section>
+
+    <section class="section" aria-labelledby="t-towns">
+      <div class="sh"><h2 id="t-towns">Près de chez vous</h2><a href="/annuaire#t-villes">Toutes les communes →</a></div>
+      <ul class="towns">
+        {towns.map((c) => <li><a href={`/ville/${c.city_slug}`}><Icon name="pin" size={14} />{c.city}<span>{fr(c.n)}</span></a></li>)}
+      </ul>
+    </section>
+
+    <section class="section pro" aria-labelledby="t-pro">
+      <div class="pro-head">
+        <p class="eyebrow">Professionnels</p>
+        <h2 id="t-pro">Vos clients vous cherchent à {CITY.name}. Soyez trouvé.</h2>
+        <p>Votre fiche est peut-être déjà dans l'annuaire : revendiquez-la gratuitement pour mettre à jour vos horaires, vos services et vos photos. Avec Pro ou Premium, affichez vos coordonnées, votre site et votre plan d'accès, apparaissez sur Google et passez devant dans votre catégorie.</p>
+      </div>
+      <ul class="plans">
+        <li>
+          <h3>Gratuit</h3>
+          <p class="price">0 €</p>
+          <ul><li>Fiche avec horaires, adresse et services</li><li>Réseaux sociaux et présentation</li><li>Mise à jour quand vous voulez</li></ul>
+        </li>
+        <li class="hl">
+          <h3>{PLANS.pro.name}</h3>
+          <p class="price">dès {monthly(PLANS.pro)} <small>HT / mois</small></p>
+          <ul>{PLANS.pro.perks.slice(0, 3).map((p) => <li>{p}</li>)}</ul>
+        </li>
+        <li>
+          <h3>{PLANS.premium.name}</h3>
+          <p class="price">dès {monthly(PLANS.premium)} <small>HT / mois</small></p>
+          <ul>{PLANS.premium.perks.slice(1, 4).map((p) => <li>{p}</li>)}</ul>
+        </li>
+      </ul>
+      <div class="pro-cta">
+        <a href="/creer-ma-fiche" class="btn btn-light">Créer ou revendiquer ma fiche</a>
+        <a href="/tarifs" class="btn btn-outline">Comparer les formules</a>
+      </div>
+    </section>
+
+    <section class="section about panel" aria-labelledby="t-about">
+      <h2 id="t-about">L'annuaire local {CITY.of} et alentour</h2>
+      <p>L'{SITE.fullName} recense les entreprises, commerces, artisans, professionnels de santé, associations et services {CITY.of} et des communes voisines : {nb(s.total, 'établissement')} classés en {nb(activeCats, 'catégorie')}, de la boulangerie au plombier, du coiffeur au vétérinaire. Chaque fiche indique les horaires d'ouverture, l'adresse et l'itinéraire, et les professionnels peuvent la compléter eux-mêmes.</p>
+      <p>Il est édité par <a href={SITE.parent.url}>{SITE.parent.name}</a>, {SITE.parent.about}. Pour parcourir toutes les catégories, toutes les communes ou les fiches de A à Z, rendez-vous sur <a href="/annuaire">le sommaire de l'annuaire</a>.</p>
+      <h3 class="faq-t">Questions fréquentes</h3>
+      {faq.map((f, i) => (
+        <details open={i === 0}>
+          <summary>{f.q}</summary>
+          <p>{f.a}</p>
+        </details>
+      ))}
+    </section>
+  </div>
+</Base>
+
+<style>
+  .hero { padding: 3.5rem 0 2.5rem; text-align: center; background: radial-gradient(60rem 22rem at 50% 0%, var(--accent-soft), transparent 70%); }
+  .kicker { display: inline-block; margin: 0 0 1rem; padding: .3rem .8rem; border-radius: 999px; background: var(--surface); border: 1px solid var(--line); color: var(--accent); font-weight: 700; font-size: .85rem; }
+  h1 { font-size: clamp(2.2rem, 6vw, 3.9rem); line-height: 1.04; letter-spacing: -0.035em; margin: 0 auto; max-width: 18ch; }
+  .grad { background: linear-gradient(135deg, var(--accent), var(--accent-2)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .lede { color: var(--muted); font-size: 1.12rem; max-width: 42rem; margin: 1.1rem auto 0; }
+  .search { max-width: 64rem; margin: 2rem auto 0; text-align: left; }
+  .quick { display: flex; flex-wrap: wrap; justify-content: center; gap: .5rem; margin-top: 1.25rem; }
+  .quick a { padding: .38rem .9rem; border-radius: 999px; border: 1px solid hsl(var(--h) 45% 82%); background: hsl(var(--h) 70% 96%); color: hsl(var(--h) 45% 28%); font-size: .88rem; font-weight: 600; }
+  .quick a:hover { border-color: hsl(var(--h) 55% 55%); }
+  .trust { list-style: none; display: flex; flex-wrap: wrap; justify-content: center; gap: .5rem 1.6rem; margin: 1.4rem 0 0; padding: 0; color: var(--muted); font-size: .9rem; }
+  .trust li { display: inline-flex; align-items: center; gap: .4rem; }
+  .trust :global(svg) { color: var(--accent); }
+
+  .first { margin-top: .5rem; }
+  .figures { margin-top: 1rem; display: grid; grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr)); gap: .8rem; }
+  .figures div { padding: 1.1rem 1.2rem; border-radius: 16px; border: 1px solid var(--line); background: var(--surface); box-shadow: var(--shadow); }
+  .figures strong { display: block; font-size: 1.9rem; letter-spacing: -0.02em; }
+  .figures span { color: var(--muted); font-size: .88rem; }
+
+  .section { margin-top: 3.25rem; }
+  .sh { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: .5rem 1rem; margin-bottom: 1rem; }
+  .sh h2, .how h2 { margin: 0; font-size: 1.3rem; letter-spacing: -0.01em; }
+  .sh a { color: var(--accent); font-weight: 600; font-size: .9rem; }
+
+  .src { color: var(--muted); font-size: .88rem; }
+  .news { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .9rem; }
+  @media (max-width: 1080px) { .news { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (max-width: 620px) { .news { grid-template-columns: 1fr; } }
+  .news a { display: flex; flex-direction: column; height: 100%; overflow: hidden; border-radius: 18px; border: 1px solid var(--line); background: var(--surface); transition: transform .15s, box-shadow .15s; }
+  .news a:hover { transform: translateY(-2px); box-shadow: var(--shadow); }
+  .news img, .news .ph { width: 100%; aspect-ratio: 16 / 9; object-fit: cover; background: var(--accent-soft); }
+  .news .ph { display: grid; place-items: center; color: var(--accent); }
+  .nb { display: grid; gap: .3rem; padding: .9rem 1rem 1.1rem; }
+  .nd { color: var(--muted); font-size: .8rem; font-weight: 600; }
+  .nt { font-weight: 700; line-height: 1.35; }
+  .ne { color: var(--muted); font-size: .88rem; line-height: 1.5; }
+  .tiles { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr)); gap: .9rem; }
+  .tiles a {
+    display: grid; gap: .35rem; height: 100%; padding: 1.2rem; border-radius: 18px; border: 1px solid hsl(var(--h) 45% 86%);
+    background: linear-gradient(150deg, hsl(var(--h) 75% 95%), var(--surface) 65%); transition: transform .15s, box-shadow .15s;
+  }
+  .tiles a:hover { transform: translateY(-2px); box-shadow: var(--shadow); }
+  .mark { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 12px; background: hsl(var(--h) 65% 55%); color: #fff; font-weight: 800; font-size: 1.2rem; margin-bottom: .3rem; }
+  .tiles .t { font-weight: 750; font-size: 1.05rem; }
+  .tiles .d { color: var(--muted); font-size: .86rem; line-height: 1.45; }
+  .tiles .n { margin-top: .3rem; color: hsl(var(--h) 50% 32%); font-weight: 700; font-size: .86rem; }
+
+  .how { padding: 1.8rem; border-radius: var(--radius); background: var(--surface); border: 1px solid var(--line); }
+  .steps { list-style: none; counter-reset: s; margin: 1.2rem 0 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr)); gap: 1.4rem; }
+  .steps li { counter-increment: s; }
+  .ico { display: inline-grid; place-items: center; width: 46px; height: 46px; border-radius: 14px; background: var(--accent-soft); color: var(--accent); }
+  .steps h3 { margin: .7rem 0 .3rem; font-size: 1.05rem; }
+  .steps h3::before { content: counter(s) ". "; color: var(--accent); }
+  .steps p { margin: 0; color: var(--muted); line-height: 1.6; }
+
+  .towns { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: .5rem; }
+  .towns a { display: inline-flex; align-items: center; gap: .4rem; padding: .45rem .9rem; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); font-weight: 600; font-size: .9rem; }
+  .towns a:hover { border-color: var(--accent); }
+  .towns :global(svg) { color: var(--accent); }
+  .towns span { color: var(--muted); font-weight: 500; font-size: .78rem; }
+
+  .pro { padding: 2.2rem; border-radius: 24px; color: #fff; background: linear-gradient(135deg, var(--accent), var(--accent-2)); box-shadow: 0 20px 40px -24px var(--accent); }
+  .eyebrow { margin: 0 0 .4rem; text-transform: uppercase; letter-spacing: .08em; font-size: .78rem; font-weight: 700; opacity: .8; }
+  .pro h2 { margin: 0 0 .6rem; font-size: clamp(1.4rem, 3vw, 1.9rem); letter-spacing: -0.02em; }
+  .pro-head p { margin: 0; max-width: 52rem; opacity: .92; line-height: 1.6; }
+  .plans { list-style: none; margin: 1.6rem 0 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: .9rem; }
+  .plans > li { padding: 1.2rem; border-radius: 16px; background: rgba(255, 255, 255, .1); border: 1px solid rgba(255, 255, 255, .25); }
+  .plans > li.hl { background: rgba(255, 255, 255, .18); border-color: rgba(255, 255, 255, .5); }
+  .plans h3 { margin: 0; font-size: 1rem; }
+  .price { margin: .3rem 0 .6rem; font-size: 1.5rem; font-weight: 800; }
+  .price small { font-size: .8rem; font-weight: 600; opacity: .8; }
+  .plans ul { margin: 0; padding-left: 1.1rem; font-size: .88rem; line-height: 1.55; opacity: .95; }
+  .pro-cta { display: flex; flex-wrap: wrap; gap: .6rem; margin-top: 1.5rem; }
+  .btn-light { background: #fff; color: var(--accent); font-weight: 700; }
+  .btn-outline { border: 1px solid rgba(255, 255, 255, .7); color: #fff; font-weight: 600; }
+
+  .about h2 { margin: 0 0 .8rem; font-size: 1.3rem; }
+  .about > p { margin: 0 0 .8rem; color: var(--muted); line-height: 1.7; }
+  .about a { color: var(--accent); font-weight: 600; }
+  .faq-t { margin: 1.4rem 0 .4rem; font-size: 1.05rem; }
+  details { border-top: 1px solid var(--line); padding: .8rem 0; }
+  summary { cursor: pointer; font-weight: 650; }
+  details p { margin: .5rem 0 0; color: var(--muted); line-height: 1.65; }
+</style>

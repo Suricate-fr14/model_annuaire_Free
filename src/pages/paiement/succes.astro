@@ -1,0 +1,45 @@
+---
+import Base from '../../layouts/Base.astro';
+import { SITE, PLANS } from '../../config';
+import { getFiche } from '../../lib/fiches';
+import { checkoutSummary } from '../../lib/stripe';
+
+const user = Astro.locals.user;
+const f = getFiche(Number(Astro.url.searchParams.get('fiche')));
+const mine = !!f && !!user && (f.owner_id === user.id || user.role === 'admin');
+
+// Événement purchase (Google Tag Manager) : montants HT, une seule fois par paiement (transaction_id = session Stripe).
+const paid = mine && f ? await checkoutSummary(Astro.url.searchParams.get('session_id') ?? '', f.id) : null;
+const ht = paid ? Math.round((paid.totalTtc / (1 + SITE.billing.vatRate / 100)) * 100) / 100 : 0;
+const purchase = paid ? [{
+  event: 'purchase', plan: paid.plan, plan_interval: paid.interval,
+  ecommerce: {
+    transaction_id: paid.id, currency: 'EUR', value: ht, tax: Math.round((paid.totalTtc - ht) * 100) / 100,
+    items: [{
+      item_id: `${paid.plan}_${paid.interval}`, item_name: `Formule ${PLANS[paid.plan].name} ${paid.interval === 'month' ? 'mensuelle' : 'annuelle'}`,
+      item_category: 'abonnement', price: ht, quantity: 1,
+    }],
+  },
+}] : [];
+---
+<Base title={`Merci ! | ${SITE.fullName}`} noindex events={purchase}>
+  <div class="wrap narrow">
+    <div class="panel">
+      <h1>Merci pour votre abonnement !</h1>
+      {mine && f ? (
+        f.certified ? (
+          <p>La formule {f.premium ? 'Premium' : 'Pro'} est active sur <strong>{f.name}</strong>. Vous pouvez maintenant ajouter votre site internet, votre présentation détaillée et vos photos.</p>
+        ) : (
+          <p>Le paiement est en cours de confirmation par Stripe : la formule sera active d'ici quelques instants. <a href="">Actualiser</a></p>
+        )
+      ) : <p>Votre paiement a bien été pris en compte.</p>}
+      {mine && f && <a class="btn gradient-bg" href={`/compte/fiches/${f.id}#s-pro`}>Compléter ma fiche</a>}
+    </div>
+  </div>
+</Base>
+
+<style>
+  .narrow { max-width: 36rem; padding-top: 3rem; }
+  h1 { margin: 0 0 .6rem; }
+  a:not(.btn) { color: var(--accent); font-weight: 600; }
+</style>

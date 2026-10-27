@@ -1,0 +1,125 @@
+---
+import Base from '../../layouts/Base.astro';
+import AccountNav from '../../components/AccountNav.astro';
+import Avatar from '../../components/Avatar.astro';
+import StatusBadge from '../../components/StatusBadge.astro';
+import { SITE } from '../../config';
+import { fichesOfOwner } from '../../lib/fiches';
+import { categoryName } from '../../lib/taxonomy';
+import { all } from '../../lib/db';
+import { leadStats } from '../../lib/leads';
+import { readIntent, intentFrom, withIntent, intentLabel } from '../../lib/intent';
+
+const user = Astro.locals.user!;
+const fiches = fichesOfOwner(user.id);
+const intent = readIntent(Astro.url);
+const claims = all<{ id: number; status: string; created_at: string; name: string; slug: string }>(
+  `SELECT c.id, c.status, c.created_at, f.name, f.slug FROM claims c JOIN fiches f ON f.id = c.fiche_id
+   WHERE c.user_id = ? ORDER BY c.created_at DESC LIMIT 10`, user.id,
+);
+const fmt = (d: string | null) => (d ? new Date(d).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' }) : '');
+---
+<Base title={`Mon espace | ${SITE.fullName}`} noindex>
+  <div class="wrap">
+    <header class="page-head">
+      <h1>Bonjour {user.name || user.email}</h1>
+      <p>Gérez vos fiches, vos horaires et votre abonnement.</p>
+    </header>
+    <AccountNav />
+    {intent && fiches.length > 0 && (
+      <p class="intent">Formule choisie : <strong>{intentLabel(intent)}</strong>. Cliquez sur « Activer » à côté de la fiche concernée.</p>
+    )}
+
+    {fiches.length === 0 ? (
+      <section class="panel empty">
+        <h2>Vous n'avez pas encore de fiche</h2>
+        <p class="muted">Votre établissement est peut-être déjà référencé : revendiquez sa fiche, ou créez-en une nouvelle.</p>
+        <div class="row">
+          <a class="btn gradient-bg" href="/creer-ma-fiche">Trouver ou créer ma fiche</a>
+        </div>
+      </section>
+    ) : (
+      <ul class="list">
+        {fiches.map((f) => (
+          <li class="panel item">
+            <Avatar name={f.name} src={f.logo} size={56} />
+            <div class="txt">
+              <h2><a href={`/${f.slug}`}>{f.name}</a></h2>
+              <p class="muted">{categoryName(f.category)} · {f.city}</p>
+              <p class="badges"><StatusBadge fiche={f} /></p>
+              <ul class="stats">
+                <li><strong>{f.views.toLocaleString('fr-FR')}</strong> vues</li>
+                {f.certified ? (
+                  <>
+                    <li><strong>{f.clicks_phone}</strong> appels</li>
+                    <li><strong>{f.clicks_route}</strong> itinéraires</li>
+                    <li><strong>{f.clicks_web}</strong> clics vers le site</li>
+                    {(f.premium || leadStats(f.id).sent > 0) && <li><a href="/compte/demandes"><strong>{leadStats(f.id).sent}</strong> demandes de contact</a></li>}
+                  </>
+                ) : (
+                  <>
+                    {f.clicks_phone_locked > 0 && <li class="locked"><strong>{f.clicks_phone_locked}</strong> {f.clicks_phone_locked > 1 ? 'personnes ont' : 'personne a'} voulu afficher votre numéro, masqué sur une fiche gratuite</li>}
+                    <li class="lock">Téléphone affiché, appels, itinéraires et clics : avec Pro ou Premium</li>
+                  </>
+                )}
+              </ul>
+              {!f.certified && f.wanted_plan && f.status === 'pending' && <p class="muted small">Formule choisie : {intentLabel(intentFrom(f.wanted_plan, f.wanted_interval)!)}, activable dès la validation.</p>}
+              {f.status === 'rejected' && f.reject_reason && <p class="reason">Motif du refus : {f.reject_reason}. Corrigez la fiche puis enregistrez-la pour la soumettre à nouveau.</p>}
+              {f.certified && f.pro_until && <p class="muted small">Abonnement {f.pro_status === 'canceled' ? "actif jusqu'au" : 'renouvelé le'} {fmt(f.pro_until)}</p>}
+            </div>
+            <div class="acts">
+              <a class="btn btn-ghost btn-sm" href={`/compte/fiches/${f.id}`}>Modifier</a>
+              {(() => {
+                const w = f.certified ? null : intent ?? intentFrom(f.wanted_plan, f.wanted_interval);
+                return <a class="btn btn-sm gradient-bg" href={withIntent(`/compte/fiches/${f.id}/abonnement`, w)}>{f.certified ? 'Ma formule' : w ? `Activer ${intentLabel(w)}` : 'Choisir une formule'}</a>;
+              })()}
+              <a class="btn btn-ghost btn-sm" href={`/${f.slug}`}>{f.status === 'published' ? 'Voir' : 'Aperçu'}</a>
+            </div>
+          </li>
+        ))}
+      </ul>
+    )}
+
+    {claims.length > 0 && (
+      <section class="panel claims">
+        <h2>Mes demandes de revendication</h2>
+        <table class="table">
+          <thead><tr><th>Fiche</th><th>Date</th><th>État</th></tr></thead>
+          <tbody>
+            {claims.map((c) => (
+              <tr>
+                <td><a href={`/${c.slug}`}>{c.name}</a></td>
+                <td>{fmt(c.created_at)}</td>
+                <td><span class:list={['badge', { 'badge-warn': c.status === 'pending', 'badge-ok': c.status === 'approved', 'badge-err': c.status === 'rejected' }]}>{{ pending: 'En cours d’examen', approved: 'Acceptée', rejected: 'Refusée' }[c.status]}</span></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </section>
+    )}
+  </div>
+</Base>
+
+<style>
+  .intent { margin: 1rem 0 0; padding: .7rem 1rem; border-radius: 12px; background: color-mix(in srgb, #f59e0b 16%, var(--surface)); font-size: .92rem; }
+  .list { list-style: none; margin: 1rem 0 0; padding: 0; display: grid; gap: .75rem; }
+  .item { display: flex; flex-wrap: wrap; gap: 1rem; align-items: flex-start; }
+  .txt { flex: 1; min-width: 14rem; }
+  .txt h2 { margin: 0; font-size: 1.15rem; }
+  .txt h2 a:hover { color: var(--accent); }
+  .txt p { margin: .3rem 0 0; }
+  .badges { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; }
+  .small { font-size: .82rem; }
+  .stats { list-style: none; margin: .5rem 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: .4rem; }
+  .stats li { padding: .25rem .65rem; border-radius: 10px; background: var(--surface-2); font-size: .82rem; color: var(--muted); }
+  .stats strong { color: var(--text); }
+  .stats .lock { background: none; border: 1px dashed var(--line); }
+  .reason { color: #b91c1c; font-size: .9rem; }
+  .acts { display: flex; flex-wrap: wrap; gap: .4rem; }
+  .empty { margin-top: 1rem; text-align: center; padding: 2.5rem 1rem; }
+  .empty h2 { margin: 0 0 .4rem; }
+  .row { display: flex; justify-content: center; gap: .5rem; margin-top: 1rem; }
+  .claims { margin-top: 1.5rem; }
+  .claims h2 { margin: 0 0 1rem; font-size: 1.1rem; }
+  .stats .locked { color: #b45309; font-weight: 600; }
+</style>

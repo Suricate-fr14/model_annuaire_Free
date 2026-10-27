@@ -1,0 +1,48 @@
+---
+import Admin from '../../layouts/Admin.astro';
+import { all, run, audit } from '../../lib/db';
+import { flash } from '../../lib/flash';
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const id = Number(form.get('id'));
+  const status = form.get('_action') === 'reopen' ? 'open' : 'resolved';
+  run('UPDATE reports SET status = ? WHERE id = ?', status, id);
+  audit(Astro.locals.user!.id, `report.${status}`, String(id));
+  flash(Astro.cookies, 'ok', status === 'resolved' ? 'Signalement traité.' : 'Signalement rouvert.');
+  return Astro.redirect('/admin/signalements' + (Astro.url.search || ''));
+}
+const showAll = Astro.url.searchParams.get('tous') === '1';
+const rows = all<any>(`SELECT r.*, f.name, f.slug, f.id AS fid FROM reports r JOIN fiches f ON f.id = r.fiche_id
+  ${showAll ? '' : "WHERE r.status = 'open'"} ORDER BY r.created_at DESC LIMIT 200`);
+const LABELS: Record<string, string> = { horaires: 'Horaires', adresse: 'Adresse', telephone: 'Téléphone', ferme: 'Fermé définitivement', doublon: 'Doublon', contenu: 'Contenu inapproprié', autre: 'Autre' };
+---
+<Admin title="Signalements">
+  <p class="toolbar"><a class="btn btn-ghost btn-sm" href={showAll ? '/admin/signalements' : '/admin/signalements?tous=1'}>{showAll ? 'Voir seulement les ouverts' : 'Voir aussi les traités'}</a></p>
+  {rows.length === 0 ? <p class="panel muted">Aucun signalement {showAll ? '' : 'ouvert'}.</p> : (
+    <div class="table-wrap">
+      <table class="table">
+        <thead><tr><th>Fiche</th><th>Motif</th><th>Message</th><th>Contact</th><th>Date</th><th></th></tr></thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr>
+              <td><a href={`/admin/fiches/${r.fid}`}>{r.name}</a></td>
+              <td><span class="badge badge-warn">{LABELS[r.reason] ?? r.reason}</span></td>
+              <td>{r.message || <span class="muted">—</span>}</td>
+              <td>{r.email ? <a href={`mailto:${r.email}`}>{r.email}</a> : <span class="muted">—</span>}</td>
+              <td><small>{r.created_at.slice(0, 16)}</small></td>
+              <td>
+                <form method="post">
+                  <input type="hidden" name="id" value={r.id} />
+                  {r.status === 'open'
+                    ? <button class="btn btn-ghost btn-sm" name="_action" value="resolve">Traité</button>
+                    : <button class="btn btn-ghost btn-sm" name="_action" value="reopen">Rouvrir</button>}
+                </form>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )}
+</Admin>
