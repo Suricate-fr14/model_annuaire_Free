@@ -10,7 +10,7 @@ import { emailValid } from '../../lib/text';
 import { rateLimited, clientIp } from '../../lib/auth';
 
 const f = getFicheBySlug(Astro.params.slug ?? '');
-if (!f || f.status !== 'published') return new Response('Fiche introuvable', { status: 404 });
+if (!f || f.status !== 'published') return new Response(null, { status: 404 });
 
 const REASONS: Record<string, string> = {
   horaires: 'Horaires incorrects', adresse: 'Adresse ou position incorrecte', telephone: 'Téléphone incorrect',

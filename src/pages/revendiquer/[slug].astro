@@ -10,7 +10,7 @@ import { phoneValid } from '../../lib/text';
 import { readIntent, intentLabel } from '../../lib/intent';
 
 const f = getFicheBySlug(Astro.params.slug ?? '');
-if (!f || f.status !== 'published') return new Response('Fiche introuvable', { status: 404 });
+if (!f || f.status !== 'published') return new Response(null, { status: 404 });
 const user = Astro.locals.user;
 const intent = readIntent(Astro.url);
 if (!user) return Astro.redirect(`/inscription?next=${encodeURIComponent(Astro.url.pathname + Astro.url.search)}`);

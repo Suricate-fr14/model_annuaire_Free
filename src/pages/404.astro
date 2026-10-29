@@ -1,0 +1,128 @@
+---
+// Page introuvable : adresse inconnue, fiche retirée ou dépubliée. Propose des fiches proches de l'adresse demandée
+// (mots de l'URL), la recherche et les univers, pour ne jamais laisser le visiteur sans suite.
+import Base from '../layouts/Base.astro';
+import SearchBar from '../components/SearchBar.astro';
+import FicheRow from '../components/FicheRow.astro';
+import { SITE, CITY } from '../config';
+import { listFiches, stats } from '../lib/fiches';
+import { universes, universeUrl } from '../lib/taxonomy';
+
+Astro.response.status = 404;
+const total = stats().total;
+// « /boulangerie-dupont-caen » : on cherche « boulangerie dupont », puis « boulangerie ».
+const words = decodeURIComponent(Astro.url.pathname).toLowerCase().split(/[^a-z0-9à-ÿ]+/).filter((w) => w.length >= 3 && !/^\d+$/.test(w));
+let guesses: ReturnType<typeof listFiches>['items'] = [];
+for (const q of [words.slice(0, 3).join(' '), words.slice(0, 2).join(' '), words[0] ?? '']) {
+  if (q.length < 3) continue;
+  try { guesses = listFiches({ q, limit: 3 }).items; } catch { guesses = []; }
+  if (guesses.length) break;
+}
+---
+<Base title={`Page introuvable | ${SITE.fullName}`} noindex>
+  <div class="wrap nf">
+    <section class="nf-hero">
+      <div class="nf-code" aria-hidden="true">
+        <span>4</span>
+        <span class="nf-pin">
+          <svg viewBox="0 0 120 150" class="pin">
+            <defs>
+              <linearGradient id="nf-g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="var(--accent)" /><stop offset="1" stop-color="var(--accent-2)" /></linearGradient>
+            </defs>
+            <path d="M60 4C30 4 8 26 8 55c0 38 52 88 52 88s52-50 52-88C112 26 90 4 60 4z" fill="url(#nf-g)" />
+            <circle cx="60" cy="55" r="27" fill="#fff" />
+            <text x="60" y="68" text-anchor="middle" font-size="38" font-weight="800" fill="var(--accent)">?</text>
+          </svg>
+          <span class="shadow"></span>
+        </span>
+        <span>4</span>
+      </div>
+      <p class="nf-kicker">Erreur 404</p>
+      <h1>Cette adresse n'existe pas&nbsp;(ou plus)</h1>
+      <p class="nf-lead">
+        Déménagement, changement de nom, lien mal recopié… la page a pris la tangente.
+        Bonne nouvelle&nbsp;: <strong>{total.toLocaleString('fr-FR')} professionnels {CITY.of}</strong> sont à deux clics.
+      </p>
+      <div class="nf-actions">
+        <a class="btn gradient-bg" href="/">Retour à l'accueil</a>
+        <a class="btn btn-ghost" href="/villes">Parcourir par ville</a>
+      </div>
+    </section>
+
+    <section class="nf-search panel" aria-label="Rechercher">
+      <h2>Que cherchiez-vous ?</h2>
+      <SearchBar />
+    </section>
+
+    {guesses.length > 0 && (
+      <section class="nf-guess" aria-labelledby="t-guess">
+        <h2 id="t-guess">Vous cherchiez peut-être</h2>
+        <ul class="list panel">{guesses.map((f) => <FicheRow fiche={f} />)}</ul>
+      </section>
+    )}
+
+    <section class="nf-uni" aria-labelledby="t-uni">
+      <h2 id="t-uni">Ou explorez l'annuaire</h2>
+      <ul>
+        {universes.map((u) => <li><a href={universeUrl(u)} style={`--h:${u.hue}`}>{u.name}</a></li>)}
+      </ul>
+    </section>
+
+    <p class="nf-pro">Vous êtes un professionnel et votre fiche a disparu ? <a href="/creer-ma-fiche">Créez-la ou retrouvez-la gratuitement</a>.</p>
+  </div>
+</Base>
+
+<style>
+  .nf { display: grid; gap: 1.5rem; padding-block: 1rem 3rem; }
+  .nf h2 { margin: 0 0 .8rem; font-size: 1.2rem; }
+
+  .nf-hero { position: relative; text-align: center; padding: 2.5rem 1rem 1rem; isolation: isolate; }
+  .nf-hero::before {
+    content: ''; position: absolute; inset: 0; z-index: -1; border-radius: 32px;
+    background:
+      radial-gradient(40rem 18rem at 50% 0%, var(--glow-1), transparent 70%),
+      radial-gradient(24rem 14rem at 85% 70%, var(--glow-2), transparent 70%),
+      repeating-linear-gradient(0deg, transparent 0 39px, color-mix(in srgb, var(--line) 60%, transparent) 39px 40px),
+      repeating-linear-gradient(90deg, transparent 0 39px, color-mix(in srgb, var(--line) 60%, transparent) 39px 40px);
+    mask-image: radial-gradient(closest-side, #000 55%, transparent);
+  }
+  .nf-code {
+    display: flex; justify-content: center; align-items: flex-end; gap: clamp(.2rem, 1.5vw, 1rem);
+    font-size: clamp(6rem, 22vw, 13rem); font-weight: 900; line-height: .85; letter-spacing: -.06em;
+  }
+  .nf-code > span:not(.nf-pin) {
+    background: linear-gradient(160deg, var(--text) 30%, var(--accent) 120%); -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .nf-pin { position: relative; display: grid; justify-items: center; width: .72em; }
+  .pin { width: 100%; height: auto; animation: nf-drop 2.6s cubic-bezier(.3, 0, .2, 1) infinite; transform-origin: 50% 100%; filter: drop-shadow(0 18px 24px rgba(35, 33, 172, .25)); }
+  .shadow { width: 55%; height: .08em; margin-top: .02em; border-radius: 50%; background: rgba(28, 24, 48, .18); animation: nf-shadow 2.6s cubic-bezier(.3, 0, .2, 1) infinite; }
+  @keyframes nf-drop {
+    0%, 100% { transform: translateY(0) scale(1, 1); }
+    12% { transform: translateY(0) scale(1.06, .92); }
+    45% { transform: translateY(-.22em) scale(.97, 1.03); }
+    78% { transform: translateY(0) scale(1, 1); }
+    86% { transform: translateY(0) scale(1.04, .95); }
+  }
+  @keyframes nf-shadow { 0%, 100%, 78% { transform: scaleX(1); opacity: 1; } 45% { transform: scaleX(.6); opacity: .45; } }
+
+  .nf-kicker { margin: 1.2rem 0 .3rem; font-size: .8rem; font-weight: 800; letter-spacing: .18em; text-transform: uppercase; color: var(--accent); }
+  .nf-hero h1 { margin: 0; font-size: clamp(1.6rem, 4vw, 2.6rem); letter-spacing: -.02em; }
+  .nf-lead { max-width: 38rem; margin: .8rem auto 0; color: var(--muted); font-size: 1.05rem; line-height: 1.6; }
+  .nf-lead strong { color: var(--text); }
+  .nf-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: .6rem; margin-top: 1.4rem; }
+
+
+  .nf-guess ul { list-style: none; margin: 0; padding: .5rem; display: grid; gap: .5rem; }
+  .nf-uni ul { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: .5rem; }
+  .nf-uni a {
+    display: inline-flex; align-items: center; gap: .45rem; padding: .5rem .9rem; border-radius: 999px; font-weight: 600; font-size: .92rem;
+    color: var(--text); text-decoration: none; background: var(--surface); border: 1px solid var(--line); transition: transform .15s, border-color .15s, background .15s;
+  }
+  .nf-uni a::before { content: ''; width: .55rem; height: .55rem; border-radius: 50%; background: hsl(var(--h) 70% 50%); }
+  .nf-uni a:hover, .nf-uni a:focus-visible { transform: translateY(-2px); border-color: hsl(var(--h) 60% 60%); background: hsl(var(--h) 70% 96%); }
+
+  .nf-pro { margin: 0; text-align: center; color: var(--muted); }
+  .nf-pro a { color: var(--accent); font-weight: 700; }
+
+  @media (prefers-reduced-motion: reduce) { .pin, .shadow { animation: none; } }
+</style>
